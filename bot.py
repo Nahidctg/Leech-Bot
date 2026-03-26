@@ -2,17 +2,17 @@ import os
 import time
 import asyncio
 from pyrogram import Client, filters
-import yt_dlp
 
-# --- আপনার তথ্য দিন ---
-API_ID = 28870226         # আপনার API ID
-API_HASH = "a5b1ff3f75941649bf5bc159782f0f00"    # আপনার API Hash
-BOT_TOKEN = "8464633052:AAHi2fyYM0GibUBMbJaM-5HsojLqdNNlOqo"  # বটের টোকেন
+# --- আপনার তথ্যগুলো এখানে আপডেট করা হয়েছে ---
+API_ID = 28870226
+API_HASH = "a5b1ff3f75941649bf5bc159782f0f00"
+BOT_TOKEN = "8464633052:AAHi2fyYM0GibUBMbJaM-5HsojLqdNNlOqo"
 
 app = Client("my_leech_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# সাইজ দেখানোর ফাংশন
+# ফাইল সাইজ সুন্দরভাবে দেখানোর ফাংশন
 def human_size(size):
+    if not size: return "0 B"
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size < 1024.0: return f"{size:.2f} {unit}"
         size /= 1024.0
@@ -21,14 +21,14 @@ def human_size(size):
 async def progress(current, total, status_msg, start_time):
     now = time.time()
     diff = now - start_time
-    if diff < 3: return
+    if diff < 3: return # প্রতি ৩ সেকেন্ড পরপর আপডেট হবে
+    
     percentage = current * 100 / total
     speed = current / diff
-    elapsed_time = round(diff)
     
-    progress_str = f"🚀 আপলোড হচ্ছে: {round(percentage, 2)}%\n" \
-                   f"📦 সাইজ: {human_size(current)} / {human_size(total)}\n" \
-                   f"⚡ গতি: {human_size(speed)}/s"
+    progress_str = f"📤 টেলিগ্রামে পাঠানো হচ্ছে...\n" \
+                   f"📊 প্রগ্রেস: {round(percentage, 2)}%\n" \
+                   f"🚀 গতি: {human_size(speed)}/s"
     try:
         await status_msg.edit_text(progress_str)
     except: pass
@@ -38,38 +38,54 @@ async def start_leech(client, message):
     url = message.text
     status_msg = await message.reply_text("লিংক প্রসেস করছি... ⏳")
 
-    # ডাউনলোড সেটিংস (আপনার দেওয়া লিংকগুলোর জন্য পারফেক্ট)
-    ydl_opts = {
-        'outtmpl': 'downloads/%(title)s.%(ext)s',
-        'noplaylist': True,
-        'quiet': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    }
+    # ব্রাউজার ইউজার এজেন্ট (Cloudflare এরর এড়াতে)
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
 
     try:
-        if not os.path.exists("downloads"): os.makedirs("downloads")
-        
         await status_msg.edit_text("সার্ভারে ডাউনলোড হচ্ছে... 📥")
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
-            file_name = os.path.basename(file_path)
+        # Aria2 কমান্ড যা রিডাইরেক্ট লিংক সাপোর্ট করে
+        cmd = [
+            "aria2c", 
+            "--console-log-level=error",
+            "-x", "16", 
+            "-s", "16", 
+            "--user-agent", user_agent,
+            "--content-disposition-default-utf8=true",
+            url
+        ]
 
-        await status_msg.edit_text("ডাউনলোড শেষ! এখন আপনাকে পাঠাচ্ছি... 📤")
+        # ডাউনলোড শুরু
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await process.communicate()
+
+        # ডাউনলোড করা ফাইলটি খুঁজে বের করা
+        all_files = [f for f in os.listdir('.') if os.path.isfile(f) and f not in ['bot.py', 'requirements.txt', 'Procfile', '.gitignore']]
+        if not all_files:
+            await status_msg.edit_text("❌ ডাউনলোড ব্যর্থ হয়েছে! লিংকটি কাজ করছে না।")
+            return
+        
+        file_path = all_files[0] 
+        file_size = os.path.getsize(file_path)
+
+        await status_msg.edit_text("ডাউনলোড শেষ! এখন টেলিগ্রামে আপলোড হচ্ছে... 📤")
         
         start_time = time.time()
         
-        # ফাইলটি সরাসরি টেলিগ্রামে পাঠানো
+        # সরাসরি টেলিগ্রামে ফাইল পাঠানো
         await client.send_document(
             chat_id=message.chat.id,
             document=file_path,
-            caption=f"✅ **ফাইল:** `{file_name}`\n💰 **সাইজ:** {human_size(os.path.getsize(file_path))}",
+            caption=f"✅ **ফাইল:** `{file_path}`\n💰 **সাইজ:** {human_size(file_size)}",
             progress=progress,
             progress_args=(status_msg, start_time)
         )
 
-        # কাজ শেষে ফাইল ডিলিট
+        # কাজ শেষে সার্ভার থেকে ফাইল ডিলিট
         os.remove(file_path)
         await status_msg.delete()
 
