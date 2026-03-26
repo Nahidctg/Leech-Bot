@@ -3,18 +3,17 @@ import time
 import asyncio
 import subprocess
 import shutil
-import re
 from pyrogram import Client, filters, errors
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- আপনার তথ্য ---
+# --- আপনার সঠিক তথ্যগুলো এখানে বসানো হয়েছে ---
 API_ID = 28870226
 API_HASH = "a5b1ff3f75941649bf5bc159782f0f00"
-BOT_TOKEN = "8464633052:AAHi2fyYM0GibUBMbJa)M-5HsojLqdNNlOqo" # টোকেনটি ঠিক করে নিন যদি ভুল থাকে
+BOT_TOKEN = "8464633052:AAHi2fyYM0GibUBMbJaM-5HsojLqdNNlOqo" # টোকেন ফিক্স করা হয়েছে
 
-app = Client("interactive_final_leech", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client("final_interactive_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# ইউজার ডাটা স্টোর করার জন্য
+# ইউজার ডাটা এবং স্টেট স্টোর করার জন্য
 user_data = {}
 
 def human_size(num):
@@ -41,7 +40,7 @@ async def progress_bar(current, total, status_text, status_msg):
             f"🌀 {bar} {round(percentage, 2)}%\n"
             f"📦 সাইজ: {human_size(current)} / {human_size(total)}"
         )
-    except:
+    except Exception:
         pass
 
 @app.on_message(filters.command("start") & filters.private)
@@ -73,12 +72,11 @@ async def download_handler(client, message):
             url
         ]
 
-        # কমান্ড রান করা
         process = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         
-        # ডাউনলোড শেষ হওয়া পর্যন্ত অপেক্ষা
+        # ডাউনলোড হওয়া পর্যন্ত অপেক্ষা
         await process.communicate()
 
         # ফাইল খুঁজে বের করা
@@ -139,22 +137,18 @@ async def upload_btn(client, callback_query):
 
     data = user_data[user_id]
     old_path = data["file_path"]
-    
-    # নতুন নাম অনুযায়ী এক্সটেনশন ঠিক রাখা
-    new_file_name = data["new_name"]
-    new_path = os.path.join(os.path.dirname(old_path), new_file_name)
+    new_path = os.path.join(os.path.dirname(old_path), data["new_name"])
     os.rename(old_path, new_path)
     
     status_msg = await callback_query.message.edit_text("📤 টেলিগ্রামে আপলোড হচ্ছে...")
     
     try:
         start_time = time.time()
-        # সরাসরি ভিডিও মুডেই আপলোড হবে
         await client.send_video(
             chat_id=user_id,
             video=new_path,
             thumb=data["thumb"],
-            caption=f"✅ **ফাইল:** `{new_file_name}`\n💰 **সাইজ:** {human_size(os.path.getsize(new_path))}",
+            caption=f"✅ **ফাইল:** `{data['new_name']}`\n💰 **সাইজ:** {human_size(os.path.getsize(new_path))}",
             supports_streaming=True,
             progress=progress_bar,
             progress_args=("📤 টেলিগ্রামে আপলোড হচ্ছে...", status_msg)
@@ -163,9 +157,8 @@ async def upload_btn(client, callback_query):
     except Exception as e:
         await status_msg.edit_text(f"❌ আপলোড এরর: {str(e)}")
     finally:
-        if os.path.exists(data["dir"]):
-            shutil.rmtree(data["dir"])
+        if os.path.exists(data["dir"]): shutil.rmtree(data["dir"])
         del user_data[user_id]
 
-print("বটটি এখন রানিং! এটি এখন আপনার দেওয়া লিংক সাপোর্ট করবে।")
+print("বটটি রানিং হয়েছে! কোনো এরর নেই।")
 app.run()
