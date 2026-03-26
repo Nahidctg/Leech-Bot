@@ -3,3 +3,4 @@ tgcrypto
 yt-dlp
 aria2
 ffmpeg
+hachoir
