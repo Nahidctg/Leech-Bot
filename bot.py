@@ -5,9 +5,9 @@ from pyrogram import Client, filters
 import yt_dlp
 
 # --- আপনার তথ্য দিন ---
-API_ID = 1234567         # আপনার API ID
-API_HASH = "your_hash"    # আপনার API Hash
-BOT_TOKEN = "your_token"  # বটের টোকেন
+API_ID = 28870226         # আপনার API ID
+API_HASH = "a5b1ff3f75941649bf5bc159782f0f00"    # আপনার API Hash
+BOT_TOKEN = "8464633052:AAHi2fyYM0GibUBMbJaM-5HsojLqdNNlOqo"  # বটের টোকেন
 
 app = Client("my_leech_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
