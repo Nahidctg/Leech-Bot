@@ -5,6 +5,8 @@ import subprocess
 import shutil
 from pyrogram import Client, filters, errors
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from hachoir.metadata import extractMetadata
+from hachoir.parser import createParser
 
 # --- আপনার সঠিক তথ্যগুলো এখানে বসানো হয়েছে ---
 API_ID = 28870226
@@ -21,6 +23,16 @@ def human_size(num):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if num < 1024.0: return f"{num:.2f} {unit}"
         num /= 1024.0
+
+# ভিডিওর ডিউরেশন (সময়) বের করার জন্য ফাংশন
+def get_duration(file_path):
+    try:
+        metadata = extractMetadata(createParser(file_path))
+        if metadata and metadata.has("duration"):
+            return metadata.get("duration").seconds
+    except Exception:
+        pass
+    return 0
 
 # প্রগ্রেস বার (Flood Wait এড়াতে ১০ সেকেন্ড বিরতি)
 last_edit = {}
@@ -138,15 +150,23 @@ async def upload_btn(client, callback_query):
     data = user_data[user_id]
     old_path = data["file_path"]
     new_path = os.path.join(os.path.dirname(old_path), data["new_name"])
-    os.rename(old_path, new_path)
+    
+    try:
+        os.rename(old_path, new_path)
+    except Exception as e:
+        await callback_query.message.edit_text(f"❌ রিনেম এরর: {str(e)}")
+        return
     
     status_msg = await callback_query.message.edit_text("📤 টেলিগ্রামে আপলোড হচ্ছে...")
     
+    # আপলোড করার আগে ভিডিওর সঠিক ডিউরেশন বের করা
+    video_duration = get_duration(new_path)
+    
     try:
-        start_time = time.time()
         await client.send_video(
             chat_id=user_id,
             video=new_path,
+            duration=video_duration, # ডিউরেশন এখানে অ্যাড করা হয়েছে
             thumb=data["thumb"],
             caption=f"✅ **ফাইল:** `{data['new_name']}`\n💰 **সাইজ:** {human_size(os.path.getsize(new_path))}",
             supports_streaming=True,
@@ -158,7 +178,7 @@ async def upload_btn(client, callback_query):
         await status_msg.edit_text(f"❌ আপলোড এরর: {str(e)}")
     finally:
         if os.path.exists(data["dir"]): shutil.rmtree(data["dir"])
-        del user_data[user_id]
+        if user_id in user_data: del user_data[user_id]
 
 print("বটটি রানিং হয়েছে! কোনো এরর নেই।")
 app.run()
