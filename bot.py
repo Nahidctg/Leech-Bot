@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 8.0 - FINAL COMPLETE) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 10.0 - Final Ultimate) ---
 # --- ফিচার: স্মার্ট ডিকোড ইঞ্জিন, ৪জিবি হাইব্রিড সাপোর্ট, ফ্লাড প্রোটেকশন ---
 # --- বিশেষ সাপোর্ট: Kraken, Vidara, Flash-Files, Fredl, Terabox (100% Fix) ---
 # ==============================================================================
@@ -12,11 +12,16 @@ import shutil
 import re
 import requests
 import yt_dlp
+import logging
 from urllib.parse import urlparse
 from pyrogram import Client, filters, idle, errors
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from hachoir.metadata import extractMetadata
 from hachoir.parser import createParser
+
+# লগার সেটআপ (ডিটেইলড লগ দেখার জন্য)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ==============================================================================
 # --- ১. গ্লোবাল কনফিগারেশন সেকশন (Config - Original Detailed) ---
@@ -71,17 +76,44 @@ def get_duration(file_path):
         if metadata and metadata.has("duration"):
             return metadata.get("duration").seconds
     except Exception as e:
-        print(f"ডিউরেশন এক্সট্রাকশন এরর: {e}")
+        logger.error(f"ডিউরেশন এক্সট্রাকশন এরর: {e}")
     return 0
 
 # ==============================================================================
-# --- ৩. স্মার্ট লিঙ্ক রেজলভার ENGINE (Smart AI Decoder + Cloudflare Fix) ---
+# --- ৩. স্মার্ট প্রগ্রেস বার (১০ সেকেন্ড ফ্লাড প্রোটেকশন + থ্রেড সেফ) ---
+# ==============================================================================
+
+async def progress_bar(current, total, status_text, status_msg, last_update_time):
+    """
+    ১০ সেকেন্ড পর পর প্রগ্রেস আপডেট করবে যাতে টেলিগ্রাম ফ্লাড বা হ্যাং না হয়।
+    """
+    now = time.time()
+    if (now - last_update_time[0]) < 10:
+        return
+    last_update_time[0] = now
+
+    percentage = (current * 100) / total if total > 0 else 0
+    bar_length = 10
+    filled_length = int(percentage // 10)
+    bar = "▰" * filled_length + "▱" * (bar_length - filled_length)
+    
+    try:
+        # প্রগ্রেস বারটি এডিট করে ইউজারকে রিয়েল টাইম তথ্য দেওয়া
+        await status_msg.edit_text(
+            f"**{status_text}**\n\n"
+            f"🌀 {bar} **{round(percentage, 2)}%**\n"
+            f"📦 সাইজ: `{human_size(current)}` / `{human_size(total)}`"
+        )
+    except Exception as e:
+        logger.error(f"প্রগ্রেস বার আপডেট এরর: {e}")
+
+# ==============================================================================
+# --- ৪. স্মার্ট লিঙ্ক রেজলভার ENGINE (Ultra Decoder + Bypass) ---
 # ==============================================================================
 
 def get_smart_link(url):
     """
-    এটি রিডাইরেক্ট এবং স্মার্ট লিঙ্ক ফিক্স করে। 
-    নতুন: এতে Cloudflare Bypass এর জন্য impersonate হেডাস যোগ করা হয়েছে।
+    এটি রিডাইরেক্ট, ক্লাউডফ্লেয়ার বাইপাস এবং স্মার্ট লিঙ্ক ফিক্স করে।
     """
     print(f"DEBUG: এনালাইসিস শুরু হচ্ছে - {url}")
     
@@ -105,7 +137,7 @@ def get_smart_link(url):
     except Exception as e:
         print(f"Redirect Analysis Error: {e}")
 
-    # ২. YT-DLP ব্যবহার করে ডিপ স্ক্যান (বিশেষ করে Kraken, Vidara এবং Flash-Files এর জন্য)
+    # ২. YT-DLP অ্যাডভান্সড স্ক্যান (Kraken, Vidara, Flash-Files এর জন্য)
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -113,47 +145,18 @@ def get_smart_link(url):
         'noplaylist': True,
         'user_agent': headers['User-Agent'],
         'nocheckcertificate': True,
-        'extractor_args': {'generic': ['impersonate']}, # বিশেষ ক্লাউডফ্লেয়ার বাইপাস
+        'extractor_args': {'generic': ['impersonate']}, # Cloudflare Bypass
     }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
             smart_url = info.get('url', url)
-            print(f"Engine লিঙ্ক খুঁজে পেয়েছে: {smart_url}")
+            print(f"Smart Engine লিঙ্ক খুঁজে পেয়েছে: {smart_url}")
             return smart_url
         except Exception as e:
-            print(f"Engine Error: {e}. অরিজিনাল লিঙ্কই ব্যবহৃত হচ্ছে।")
+            print(f"YT-DLP Engine Error: {e}")
             return url
-
-# ==============================================================================
-# --- ৪. স্মার্ট প্রগ্রেস বার (১০ সেকেন্ড ফ্লাড প্রোটেকশন + হ্যাং ফিক্স) ---
-# ==============================================================================
-
-async def progress_bar(current, total, status_text, status_msg, last_update_time):
-    """
-    ডাউনলোড এবং আপলোড চলাকালীন বিস্তারিত বার।
-    এখন এটি ১০ সেকেন্ড পর পর আপডেট হবে যাতে টেলিগ্রাম ফ্লাড ওয়েট বা হ্যাং না হয়।
-    """
-    now = time.time()
-    if (now - last_update_time[0]) < 10:
-        return
-    last_update_time[0] = now
-
-    percentage = (current * 100) / total if total > 0 else 0
-    bar_length = 10
-    filled_length = int(percentage // 10)
-    bar = "▰" * filled_length + "▱" * (bar_length - filled_length)
-    
-    try:
-        # প্রগ্রেস বারটি এডিট করে ইউজারকে রিয়েল টাইম তথ্য দেওয়া
-        await status_msg.edit_text(
-            f"**{status_text}**\n\n"
-            f"🌀 {bar} **{round(percentage, 2)}%**\n"
-            f"📦 সাইজ: `{human_size(current)}` / `{human_size(total)}`"
-        )
-    except Exception as e:
-        print(f"Update Error: {e}")
 
 # ==============================================================================
 # --- ৫. মেসেজ হ্যান্ডলারসমূহ (The Core System) ---
@@ -161,7 +164,7 @@ async def progress_bar(current, total, status_text, status_msg, last_update_time
 
 @app.on_message(filters.command("start") & filters.private)
 async def start(client, message):
-    """বট স্টার্ট হ্যান্ডলার (বিস্তারিত রেসপন্স চেক)"""
+    """বট স্টার্ট হ্যান্ডলার (Detailed Response)"""
     print(f"DEBUG: Start কমান্ড দিয়েছেন: {message.from_user.id}")
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
@@ -169,17 +172,19 @@ async def start(client, message):
         f"**বট অনলাইন এবং ১০০% রেসপন্স করার জন্য প্রস্তুত! 🚀**\n\n"
         f"এখন যেকোনো লিঙ্ক (Kraken, Vidara, Terabox, Flash-Files সহ) পাঠান।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n\n"
-        f"যেকোনো মুভি বা ভিডিও লিঙ্ক পাঠান। প্রগ্রেস ১০ সেকেন্ড পর পর আপডেট হবে।"
+        f"যেকোনো মুভি বা ভিডিও লিঙ্ক পাঠান। প্রতিটি ধাপে প্রগ্রেস বার দেখতে পাবেন।"
     )
 
-# --- ৬. ডাউনলোড সেকশন (Aria2 + YT-DLP Fallback with UI Progress) ---
+# --- ৬. ডাউনলোড সেকশন (Aria2 + YT-DLP Master Logic) ---
 
 @app.on_message(filters.regex(r'https?://[^\s]+') & filters.private)
 async def download_handler(client, message):
     """লিঙ্ক পাওয়ার পর অটো-বাইপাস এবং ডাউনলোড প্রসেস।"""
     url = message.text.strip()
     user_id = message.from_user.id
-    print(f"নতুন লিঙ্ক এসেছে: {url}")
+    
+    # বর্তমান ইভেন্ট লুপ সেভ করা (থ্রেড ফিক্সের জন্য অত্যন্ত জরুরি)
+    loop = asyncio.get_event_loop()
     
     status_msg = await message.reply_text("স্মার্ট ইঞ্জিন লিঙ্কটি এনালাইসিস করছে... 🔎")
     
@@ -196,10 +201,10 @@ async def download_handler(client, message):
     last_update_time = [0]
 
     try:
-        # ১. Aria2 চেষ্টা (সাধারণ ডিরেক্ট লিঙ্কের জন্য)
-        is_protected_site = any(x in url for x in ["kraken", "vidara", "flash-files", "fredl", "terabox"])
+        # ১. Aria2 চেষ্টা (যদি প্রটেক্টেড সাইট না হয়)
+        is_stream_site = any(x in url for x in ["kraken", "vidara", "flash-files", "fredl", "terabox", "frdl"])
         
-        if not is_protected_site:
+        if not is_stream_site:
             await status_msg.edit_text("Aria2 ইঞ্জিন দিয়ে ডাউনলোড হচ্ছে... 📥")
             cmd = [
                 "aria2c", "--dir", download_dir, "--max-connection-per-server=16",
@@ -220,25 +225,25 @@ async def download_handler(client, message):
                     percentage = int(match.group(1))
                     size_match = re.search(r'(\d+(?:\.\d+)?\w+)/(\d+(?:\.\d+)?\w+)', line_str)
                     if size_match:
-                        # সাইজ অনুযায়ী প্রগ্রেস বার আপডেট
                         await progress_bar(percentage, 100, "📥 Aria2 ডাউনলোড হচ্ছে...", status_msg, last_update_time)
             await process.wait()
 
-        # ২. বিকল্প ইঞ্জিন (YT-DLP) যদি Aria2 ফেল করে বা প্রটেক্টেড সাইট হয়
+        # ২. বিকল্প ইঞ্জিন (YT-DLP) যদি Aria2 কাজ না করে বা প্রটেক্টেড সাইট হয়
         files = [os.path.join(download_dir, f) for f in os.listdir(download_dir) if not f.endswith(".aria2")]
         
         if not files:
             await status_msg.edit_text("অ্যাডভান্সড ইঞ্জিন (YT-DLP) ব্যবহার হচ্ছে... 🔄")
             
-            # প্রগ্রেস লজিক (হ্যাং ইস্যু ফিক্সড করার জন্য থ্রেড-সেফ কল)
+            # প্রগ্রেস লজিক (হ্যাং এবং ইভেন্ট লুপ ফিক্সড)
             def ydl_progress_hook(d):
                 if d['status'] == 'downloading':
-                    current = d.get('downloaded_bytes', 0)
-                    total = d.get('total_bytes') or d.get('total_bytes_estimate', 1)
-                    # ইউআই আপডেট করার জন্য কল
+                    current_bytes = d.get('downloaded_bytes', 0)
+                    total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 1)
+                    
+                    # মূল ইভেন্ট লুপে প্রগ্রেস বার পাঠানো (থ্রেড সেফ)
                     asyncio.run_coroutine_threadsafe(
-                        progress_bar(current, total, "📥 অ্যাডভান্সড ডাউনলোড...", status_msg, last_update_time),
-                        asyncio.get_event_loop()
+                        progress_bar(current_bytes, total_bytes, "📥 অ্যাডভান্সড ডাউনলোড...", status_msg, last_update_time),
+                        loop
                     )
 
             ydl_opts = {
@@ -246,20 +251,22 @@ async def download_handler(client, message):
                 'progress_hooks': [ydl_progress_hook],
                 'extractor_args': {'generic': ['impersonate']},
                 'nocheckcertificate': True,
-                'quiet': True
+                'quiet': True,
+                'no_warnings': True
             }
             
-            # এটি বটের মেইন লুপকে হ্যাং করবে না
+            # YT-DLP কে আলাদা থ্রেডে চালানো যাতে বট রেসপন্স করে
             await asyncio.to_thread(yt_dlp.YoutubeDL(ydl_opts).download, [url])
             files = [os.path.join(download_dir, f) for f in os.listdir(download_dir)]
 
         if not files:
-            await status_msg.edit_text("❌ ডাউনলোড ব্যর্থ! লিঙ্কটি প্রটেক্টেড অথবা সার্ভার রেসপন্স দিচ্ছে না।")
+            await status_msg.edit_text("❌ ডাউনলোড ব্যর্থ! লিঙ্কটি ইনভ্যালিড অথবা প্রটেক্টেড।")
             return
         
         file_path = max(files, key=os.path.getctime)
         file_size = os.path.getsize(file_path)
 
+        # ইউজার ডেটা স্টোর (অরিজিনাল ফিচার)
         user_data[user_id] = {
             "file_path": file_path, "new_name": os.path.basename(file_path),
             "thumb": None, "dir": download_dir
@@ -275,10 +282,10 @@ async def download_handler(client, message):
         )
 
     except Exception as e:
-        print(f"ডাউনলোড এরর: {e}")
+        logger.error(f"ডাউনলোড প্রসেস এরর: {e}")
         await status_msg.edit_text(f"❌ ডাউনলোড এরর: {str(e)}")
 
-# --- ৭. রিনেম ও থাম্বনেইল হ্যান্ডলার (Customization - অরিজিনাল ফিচার) ---
+# --- ৭. রিনেম ও থাম্বনেইল হ্যান্ডলার (অরিজিনাল ফিচার) ---
 
 @app.on_message(filters.private & (filters.text | filters.photo) & ~filters.command(["start"]))
 async def customization_handler(client, message):
@@ -295,7 +302,7 @@ async def customization_handler(client, message):
         user_data[user_id]["thumb"] = thumb_path
         await message.reply_text("🖼 থাম্বনেইল সেট হয়েছে!")
 
-# --- ৮. আপলোড সেকশন (The Hybrid 4GB Support Logic) ---
+# --- ৮. আপলোড সেকশন (Hybrid 4GB Support Logic - No Change) ---
 
 @app.on_callback_query(filters.regex("upload"))
 async def upload_btn(client, callback_query):
@@ -330,7 +337,7 @@ async def upload_btn(client, callback_query):
                 thumb=data["thumb"], caption=f"✅ `{final_name}`",
                 progress=upload_progress
             )
-            # চ্যানেল থেকে কপি করে ইউজারকে পাঠানো
+            # চ্যানেল থেকে ইউজারের কাছে কপি করা
             await app.copy_message(
                 chat_id=user_id, from_chat_id=LOG_CHANNEL, message_id=sent_msg.id,
                 caption=f"✅ **ফাইল:** `{final_name}`\n💰 {human_size(file_size)}"
@@ -338,7 +345,7 @@ async def upload_btn(client, callback_query):
         else:
             # ২জিবি সাধারণ মোড
             if file_size > 2000 * 1024 * 1024:
-                return await status_msg.edit_text("❌ সেশন ছাড়া ২জিবির বড় ফাইল আপলোড সম্ভব নয়।")
+                return await status_msg.edit_text("❌ সেশন ছাড়া ২জিবির বড় ফাইল সম্ভব নয়।")
             await app.send_video(
                 chat_id=user_id, video=new_path, duration=video_dur,
                 thumb=data["thumb"], caption=f"✅ `{final_name}`",
@@ -346,7 +353,7 @@ async def upload_btn(client, callback_query):
             )
         await status_msg.delete()
     except Exception as e:
-        print(f"আপলোড এরর: {e}")
+        logger.error(f"আপলোড এরর: {e}")
         await status_msg.edit_text(f"❌ আপলোড এরর: {str(e)}")
     finally:
         # ক্লিনআপ
@@ -354,13 +361,14 @@ async def upload_btn(client, callback_query):
         if user_id in user_data: del user_data[user_id]
 
 # ==============================================================================
-# --- ৯. সিস্টেম রানার সেকশন (The Final Runner) ---
+# --- ৯. সিস্টেম রানার সেকশন (The Runner) ---
 # ==============================================================================
 
 async def start_services():
     """বট এবং ইউজার সেশন একসাথে স্টার্ট করার জন্য ফাইনাল মেথড।"""
     print("-" * 40)
-    print("সার্ভার সিস্টেম চালু হচ্ছে...")
+    print("সার্ভার সিস্টেম চালু হচ্ছে... (Version 10.0)")
+    
     await app.start()
     print("মূল বট ক্লায়েন্ট স্টার্ট হয়েছে! ✅")
     
@@ -374,11 +382,13 @@ async def start_services():
     print("বট এখন পুরোপুরি অনলাইন এবং ১০০% রেসপন্স করার জন্য প্রস্তুত! 🚀")
     print("-" * 40)
     await idle()
+    
     await app.stop()
     if user_app: await user_app.stop()
 
 if __name__ == "__main__":
     try:
-        asyncio.get_event_loop().run_until_complete(start_services())
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(start_services())
     except KeyboardInterrupt:
-        print("বন্ধ করা হয়েছে।")
+        print("বট বন্ধ করা হয়েছে।")
