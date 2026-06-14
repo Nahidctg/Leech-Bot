@@ -38,8 +38,9 @@ BOT_TOKEN = "8464633052:AAFQv6OqDkpipNyLxAE5SqgYnH9201mpK6E"
 STRING_SESSION = "" 
 LOG_CHANNEL = -1003999674690 
 
+# সেশন রিভোকড সমস্যা এড়াতে সেশনের নাম পরিবর্তন করে ultimate_bot_instance_v3 করা হয়েছে
 app = Client(
-    "ultimate_bot_instance", 
+    "ultimate_bot_instance_v3", 
     api_id=API_ID, 
     api_hash=API_HASH, 
     bot_token=BOT_TOKEN,
@@ -231,10 +232,18 @@ async def download_handler(client, message):
     user_id = message.from_user.id
     loop = asyncio.get_event_loop()
     
+    # 🧹 স্পেস বাঁচানোর জন্য ওই ইউজারের যদি আগে থেকে কোনো অসম্পূর্ণ ডাউনলোডের ডিরেক্টরি সচল থাকে তা মুছে ফেলা হচ্ছে
+    if user_id in user_data:
+        shutil.rmtree(user_data[user_id]["dir"], ignore_errors=True)
+        del user_data[user_id]
+        
     status_msg = await message.reply_text("🔎 লিঙ্ক বিশ্লেষণ ও সেরা ডাউনলোড মেথড খোঁজা হচ্ছে...")
     
     # অ্যাডাপ্টিভ ডিকোডিং এবং রোটেশনাল হেডার জেনারেশন
     direct_link = await asyncio.to_thread(get_smart_link, url)
+    if not direct_link:
+        direct_link = url
+        
     headers = get_adaptive_headers(direct_link)
     
     download_dir = f"downloads/{user_id}_{int(time.time())}"
@@ -317,6 +326,8 @@ async def download_handler(client, message):
         
     except Exception as e:
         logger.error(f"সবগুলো মেথড ব্যর্থ হয়েছে: {e}")
+        # ক্র্যাশ করলে টেম্প ফোল্ডারটি রিমুভ করে দেওয়া হবে
+        shutil.rmtree(download_dir, ignore_errors=True)
         await status_msg.edit_text(f"❌ **ডাউনলোড ব্যর্থ!**\n\n**কারণ:** সার্ভারটি রিকোয়েস্ট ব্লক করেছে অথবা আইপি লক রয়েছে।\n`{str(e)}`")
 
 # ==============================================================================
@@ -445,7 +456,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.0)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.0)")
     
     await app.start()
     bot_info = await app.get_me()
