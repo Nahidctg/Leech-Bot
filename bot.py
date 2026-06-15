@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.1 - Adaptive Stream Support) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.2 - Cloudflare Bypass Upgrade) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -38,7 +38,6 @@ BOT_TOKEN = "8464633052:AAFQv6OqDkpipNyLxAE5SqgYnH9201mpK6E"
 STRING_SESSION = "" 
 LOG_CHANNEL = -1003999674690 
 
-# সেশন রিভোকড সমস্যা এড়াতে সেশনের নাম ultimate_bot_instance_v3 রাখা হয়েছে
 app = Client(
     "ultimate_bot_instance_v3", 
     api_id=API_ID, 
@@ -83,14 +82,12 @@ def get_adaptive_headers(url, original_url=None):
         'Upgrade-Insecure-Requests': '1',
     }
     
-    # যদি মূল রিকোয়েস্টের লিঙ্ক থাকে, তবে সেটিকে Referer হিসেবে সেট করা হয়
     if original_url:
         headers['Referer'] = original_url
         headers['Origin'] = f"https://{urlparse(original_url).netloc}"
     else:
         headers['Referer'] = f"https://{domain}/"
     
-    # বিশেষ কিছু ডোমেইনের জন্য অতিরিক্ত রেফারার এবং অরিজিন সেটআপ
     if "workers.dev" in domain or "mexanig" in domain:
         headers['Origin'] = f"https://{domain}"
         headers['Sec-Fetch-Dest'] = 'document'
@@ -127,7 +124,7 @@ def get_duration(file_path):
     return 0
 
 # ==============================================================================
-# --- ৩. ইউনিফাইড প্রগ্রেস বার ---
+# --- ৩. ইউনিফাইড প্রপ্রেস বার ---
 # ==============================================================================
 
 async def progress_bar(current, total, status_text, status_msg, start_time, last_update_time):
@@ -166,8 +163,23 @@ async def progress_bar(current, total, status_text, status_msg, start_time, last
         logger.error(f"UI আপডেট এরর: {e}")
 
 # ==============================================================================
-# --- ৩.১ কাস্টম সাইট স্ক্র্যাপার (Luluvid / Lulustream) ---
+# --- ৩.১ কাস্টম সোর্স স্ক্র্যাপার ও ক্লাউডফ্লেয়ার বাইপাস মেকানিজম ---
 # ==============================================================================
+
+def fetch_html_with_curl(url, headers):
+    """সিস্টেম লেভেলের Curl ব্যবহার করে ক্লাউডফ্লেয়ার ও TLS ব্লক বাইপাস করার চেষ্টা"""
+    try:
+        cmd = ["curl", "-s", "-L", "--connect-timeout", "12"]
+        for key, val in headers.items():
+            cmd.extend(["-H", f"{key}: {val}"])
+        cmd.append(url)
+        
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='ignore')
+        if result.returncode == 0:
+            return result.stdout
+    except Exception as e:
+        logger.error(f"সিস্টেম Curl রান করতে ব্যর্থ: {e}")
+    return None
 
 def scrape_luluvid(url):
     """Luluvid/Lulustream এবং অনুরূপ সাইট থেকে আসল স্ট্রিম লিঙ্ক স্ক্র্যাপ করে"""
@@ -176,29 +188,49 @@ def scrape_luluvid(url):
         domain = parsed.netloc
         path = parsed.path.strip('/')
         
-        # যদি লিঙ্কটি এমবেড ফরম্যাটে না থাকে, তবে রূপান্তর করে নেওয়া হচ্ছে
         if not path.startswith('e/'):
             embed_url = f"https://{domain}/e/{path}"
         else:
             embed_url = url
             
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': url,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
         }
         
-        response = requests.get(embed_url, headers=headers, timeout=15)
-        if response.status_code == 200:
-            html = response.text
-            # স্ক্রিপ্ট ফাইল থেকে .m3u8 বা .mp4 সোর্স ফাইল খোঁজার জন্য রেগুলার এক্সপ্রেশন
+        html = None
+        # মেথড এ: সাধারণ requests মডিউল ট্রাই করা হচ্ছে
+        try:
+            response = requests.get(embed_url, headers=headers, timeout=12)
+            if response.status_code == 200 and "cloudflare" not in response.text.lower():
+                html = response.text
+        except Exception as e:
+            logger.warning(f"সাধারণ HTTP রিকোয়েস্টে ত্রুটি: {e}")
+            
+        # মেথড বি: সাধারণ রিকোয়েস্ট ব্লক হলে Curl-এর মাধ্যমে ট্রাই করা হচ্ছে
+        if not html:
+            logger.info("সাধারণ রিকোয়েস্ট ব্লক হয়েছে। সিস্টেম-লেভেল Curl বাইপাস ট্রাই করা হচ্ছে...")
+            html = fetch_html_with_curl(embed_url, headers)
+            
+        if html:
+            # .m3u8 বা .mp4 সোর্স ফাইল খোঁজা হচ্ছে
             stream_links = re.findall(r'["\'](https?://[^\s"\']+\.(?:m3u8|mp4)[^\s"\']*)["\']', html)
             if stream_links:
                 resolved_url = stream_links[0]
-                logger.info(f"Luluvid থেকে ডাইরেক্ট সোর্স পাওয়া গেছে: {resolved_url}")
+                logger.info(f"Luluvid সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
                 return resolved_url
+                
+            # বিকল্প রেগুলার এক্সপ্রেশন (যেমন: file: "...")
+            file_match = re.search(r'file\s*:\s*["\'](https?://[^"\']+)["\']', html)
+            if file_match:
+                resolved_url = file_match.group(1)
+                logger.info(f"Luluvid অল্টারনেটিভ সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
+                return resolved_url
+                
     except Exception as e:
-        logger.error(f"Luluvid স্ক্র্যাপিং ব্যর্থ হয়েছে: {e}")
+        logger.error(f"Luluvid স্ক্র্যাপিং সম্পূর্ণ ব্যর্থ: {e}")
     return None
 
 # ==============================================================================
@@ -209,23 +241,21 @@ def get_smart_link(url):
     """ইঞ্জিনটি স্বয়ংক্রিয়ভাবে পরীক্ষা করবে লিঙ্কটি সরাসরি নাকি কোনো স্ক্র্যাপার প্রয়োজন"""
     logger.info(f"অ্যাডাপ্টিভ এনালাইসিস শুরু: {url}")
     
-    # ১. Luluvid/Lulustream ডোমেন চেক এবং কাস্টম স্ক্র্যাপার কল
+    # ১. Luluvid/Lulustream ডোমেন সনাক্তকরণ
     if any(domain in url.lower() for domain in ["luluvid.com", "lulustream.com", "lulushare.com"]):
         scraped_link = scrape_luluvid(url)
         if scraped_link:
             return scraped_link
 
-    # ২. অন্যান্য সাধারণ লিঙ্কের জন্য ডাইরেক্ট লিঙ্ক খোঁজার প্রক্রিয়া
     headers = get_adaptive_headers(url)
+    
     try:
         session = requests.Session()
         session.headers.update(headers)
         
-        # রিডাইরেকশন ট্র্যাক করা এবং আসল ডাইরেক্ট লিঙ্কটি খুঁজে বের করা
         response = session.head(url, allow_redirects=True, timeout=10)
         final_url = response.url
         
-        # যদি সরাসরি কোনো ভিডিও ফাইলের সন্ধান মেলে
         if any(ext in final_url.lower() for ext in ['.mkv', '.mp4', '.zip', '.rar', '.mov', '.avi', '.ts']):
             logger.info(f"সরাসরি ভিডিও লিঙ্ক পাওয়া গেছে: {final_url}")
             return final_url
@@ -234,7 +264,6 @@ def get_smart_link(url):
     except Exception as e:
         logger.warning(f"প্রাথমিক হেড চেকিং ব্যর্থ: {e}")
 
-    # যদি ডাইরেক্ট ফাইল না হয়, তবে yt-dlp এর মাধ্যমে মেটাডেটা এনালাইসিস করা হবে
     ydl_opts = {
         'quiet': True, 
         'no_warnings': True, 
@@ -263,8 +292,8 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.1 - Adaptive Stream Engine)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে স্মার্ট লিঙ্ক ডিটেকশন অ্যালগরিদম। এটি যেকোনো সাধারণ লিঙ্ক, ক্লাউডফ্লেয়ার ওয়ার্কার লিঙ্ক বা স্ট্রিমিং লিঙ্ক (যেমন: Lulustream) স্বয়ংক্রিয়ভাবে প্রসেস করতে সক্ষম।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.2 - Cloudflare Bypass Upgrade)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে স্মার্ট লিঙ্ক ডিটেকশন অ্যালগরিদম এবং কাস্টম ক্লাউডফ্লেয়ার বাইপাস মেকানিজম।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
@@ -280,19 +309,16 @@ async def download_handler(client, message):
     user_id = message.from_user.id
     loop = asyncio.get_event_loop()
     
-    # 🧹 স্পেস বাঁচানোর জন্য ওই ইউজারের যদি আগে থেকে কোনো অসম্পূর্ণ ডাউনলোডের ডিরেক্টরি সচল থাকে তা মুছে ফেলা হচ্ছে
     if user_id in user_data:
         shutil.rmtree(user_data[user_id]["dir"], ignore_errors=True)
         del user_data[user_id]
         
     status_msg = await message.reply_text("🔎 লিঙ্ক বিশ্লেষণ ও সেরা ডাউনলোড মেথড খোঁজা হচ্ছে...")
     
-    # অ্যাডাপ্টিভ ডিকোডিং এবং রোটেশনাল হেডার জেনারেশন
     direct_link = await asyncio.to_thread(get_smart_link, url)
     if not direct_link:
         direct_link = url
         
-    # রিকোয়েস্টে সঠিক ট্র্যাকিং বজায় রাখার জন্য original_url পাস করা হয়েছে
     headers = get_adaptive_headers(direct_link, original_url=url)
     
     download_dir = f"downloads/{user_id}_{int(time.time())}"
@@ -302,13 +328,13 @@ async def download_handler(client, message):
     start_time = time.time()
     last_update_time = [0]
 
-    # সিদ্ধান্ত গ্রহণ: ডোমেইনের ধরন এবং লিঙ্কের এক্সটেনশন যাচাই করা (HLS .m3u8 স্ট্রিমিং সরাসরি স্ট্রিম মেথডে চলবে না)
+    # সিদ্ধান্ত গ্রহণ: HLS (.m3u8) হলে সরাসরি স্ট্রিম মেথড বাইপাস করে মেথড-১ (YT-DLP) এ পাঠানো হবে
     is_direct_file = (any(ext in direct_link.lower() for ext in ['.mkv', '.mp4', '.zip', '.rar', '.mov', '.avi', '.ts']) 
                       or "workers.dev" in direct_link) and ".m3u8" not in direct_link.lower()
     
     if not is_direct_file:
-        # মেথড ১: সাধারণ সোশ্যাল, ওটিটি ভিডিও অথবা HLS প্লেলিস্ট হলে YT-DLP ব্যবহার করা হবে
-        await status_msg.edit_text("📥 YT-DLP ইঞ্জিন সক্রিয় করা হচ্ছে...")
+        # মেথড ১: YT-DLP ব্যবহার করা হচ্ছে
+        await status_msg.edit_text("📥 ডাউনলোড ইঞ্জিন সক্রিয় করা হচ্ছে (YT-DLP)...")
         try:
             def ydl_progress_hook(d):
                 if d['status'] == 'downloading':
@@ -326,7 +352,7 @@ async def download_handler(client, message):
                 'quiet': True,
                 'no_warnings': True,
                 'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
-                'concurrent_fragment_downloads': 3, # ব্লক এড়াতে ৩ রাখা হয়েছে
+                'concurrent_fragment_downloads': 3,
                 'buffersize': 1024 * 64,
                 'http_headers': headers
             }
@@ -339,12 +365,20 @@ async def download_handler(client, message):
                 await finish_download(user_id, file_path, download_dir, status_msg, message)
                 return
         except Exception as e:
-            logger.error(f"YT-DLP ইঞ্জিন ব্যর্থ হয়েছে: {e}. অল্টারনে티브 প্রোটোকল ট্রাই করা হচ্ছে...")
+            logger.error(f"YT-DLP ইঞ্জিন ব্যর্থ হয়েছে: {e}")
+            # .m3u8 লিঙ্ক হলে পরবর্তী মেথডে ট্রাই করার প্রয়োজন নেই, সরাসরি ব্যর্থতা জানানো হবে
+            if ".m3u8" in direct_link.lower() or "lulucdn" in direct_link.lower():
+                shutil.rmtree(download_dir, ignore_errors=True)
+                await status_msg.edit_text(
+                    f"❌ **ডাউনলোড ব্যর্থ!**\n\n"
+                    f"**কারণ:** সার্ভার সিকিউরিটি লক এড়ানো যায়নি। স্ট্রিম লিঙ্ক পাওয়া গেলেও সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে।\n"
+                    f"`{str(e)[:150]}`"
+                )
+                return
 
-    # মেথড ২: ক্লাউডফ্লেয়ার ওয়ার্কার বা ডাইরেক্ট সেশন বাইপাস ইঞ্জিন (HTTP-Stream chunking)
+    # মেথড ২: সাধারণ ভিডিও এবং ক্লাউডফ্লেয়ার ওয়ার্কার বাইপাস ইঞ্জিন (HTTP-Stream chunking)
     await status_msg.edit_text("⚙️ প্রক্সি বাইপাস ইঞ্জিন সক্রিয় হচ্ছে (HTTP-Stream)...")
     try:
-        # ফাইল নাম নির্ধারণের প্রচেষ্টা
         parsed_url = urlparse(direct_link)
         filename = os.path.basename(parsed_url.path) or "video_file.mp4"
         if not any(filename.lower().endswith(ext) for ext in ['.mp4', '.mkv', '.mov', '.avi', '.zip', '.rar', '.ts']):
@@ -352,20 +386,18 @@ async def download_handler(client, message):
             
         file_path = os.path.join(download_dir, filename)
         
-        # রিজিউম ও বাফার সাপোর্টসহ স্ট্রিম রিকোয়েস্ট পাঠানো
         response = requests.get(direct_link, headers=headers, stream=True, timeout=45)
         response.raise_for_status()
         
         total_size = int(response.headers.get('content-length', 0))
         
-        # যদি কনটেন্ট টাইপ এইচটিএমএল হয়, তবে সেশনটি সম্ভবত ব্লক হয়েছে
         content_type = response.headers.get('content-type', '')
         if "text/html" in content_type and total_size < 100 * 1024:
             raise ValueError("সার্ভার রিকোয়েস্ট রিজেক্ট করেছে (আইপি বা সিকিউরিটি লক)")
 
         downloaded = 0
         with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=1024 * 128): # ১২৮কেবি হাই স্পিড বাফার
+            for chunk in response.iter_content(chunk_size=1024 * 128):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
@@ -376,7 +408,6 @@ async def download_handler(client, message):
         
     except Exception as e:
         logger.error(f"সবগুলো মেথড ব্যর্থ হয়েছে: {e}")
-        # ক্র্যাশ করলে টেম্প ফোল্ডারটি রিমুভ করে দেওয়া হবে
         shutil.rmtree(download_dir, ignore_errors=True)
         await status_msg.edit_text(f"❌ **ডাউনলোড ব্যর্থ!**\n\n**কারণ:** সার্ভারটি রিকোয়েস্ট ব্লক করেছে অথবা আইপি লক রয়েছে।\n`{str(e)}`")
 
@@ -506,7 +537,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.1)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.2)")
     
     await app.start()
     bot_info = await app.get_me()
