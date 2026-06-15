@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.7 - Universal HTML Scraper) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.8 - Decoded Stream Patch) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -13,6 +13,7 @@ import random
 import requests
 import yt_dlp
 import logging
+import html as html_lib  # HTML Entity Decoding এর জন্য
 from datetime import datetime
 from urllib.parse import urlparse
 from pyrogram import Client, filters, idle, errors
@@ -188,16 +189,20 @@ def scrape_luluvid(url):
         path = parsed.path.strip('/')
         
         # ইউনিক ভিডিও কোড আলাদা করা হচ্ছে
-        code = path.replace('e/', '').strip('/')
+        code = path.split('/')[-1]
         
-        # Luluvid-এর সক্রিয় মিরর ডোমেনসমূহের তালিকা
+        # Luluvid-এর সক্রিয় মিরর ডোমেনসমূহের তালিকা (Embed এবং Download পেজসহ)
         mirrors = [
             f"https://luluply.com/e/{code}",
             f"https://lulustream.co/e/{code}",
             f"https://lulusp.com/e/{code}",
             f"https://lulushare.com/e/{code}",
             f"https://lulustream.com/e/{code}",
-            f"https://luluvid.com/e/{code}"
+            f"https://luluvid.com/e/{code}",
+            # ব্যাকআপ ডাউনলোড লিংক সোর্স
+            f"https://luluply.com/d/{code}",
+            f"https://lulustream.co/d/{code}",
+            f"https://lulusp.com/d/{code}"
         ]
         
         headers = {
@@ -257,27 +262,34 @@ def scrape_luluvid(url):
                     break
             
         if html and m_url_used:
-            html = html.replace('\\/', '/')
+            # ক. HTML Entity ডিকোডিং (যেমন: &#x2F; -> /)
+            html_cleaned = html_lib.unescape(html)
             
-            # নতুন ইউনিভার্সাল স্ক্র্যাপিং লজিক: এটি কোটেড স্ট্রিং থেকে ডাইরেক্ট ও রিলেটিভ লিঙ্ক আলাদা করবে
-            matches = re.findall(r'["\']([^"\']+\.(?:m3u8|mp4)[^\s"\']*)["\']', html)
+            # খ. JSON Escaped স্ল্যাশ ক্লিন করা (যেমন: \/ -> /)
+            html_cleaned = html_cleaned.replace('\\/', '/')
+            
+            # গ. Escaped কোটেশন রিমুভ করা
+            html_cleaned = html_cleaned.replace('\\"', '"').replace("\\'", "'")
+            
+            # ঘ. কোটেশন-মুক্ত ডাইনামিক রেগুলার এক্সপ্রেশন
+            pattern = r'(?:https?://|//|/)[^\s"\'<>]+?\.(?:m3u8|mp4)[^\s"\'<>]*'
+            matches = re.findall(pattern, html_cleaned)
+            
             for match in matches:
-                if any(x in match.lower() for x in ['player.js', 'videojs', 'hls.js', 'clappr', 'analytics']):
+                if any(x in match.lower() for x in ['player.js', 'videojs', 'hls.js', 'clappr', 'analytics', 'opensubtitles']):
                     continue
                 
                 # ডাইরেক্ট লিঙ্ক সলভার
                 if match.startswith('http://') or match.startswith('https://'):
-                    logger.info(f"ডাইরেক্ট ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
+                    logger.info(f"সরাসরি ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
                     return match
                 # প্রোটোকল রিলেটিভ সলভার
                 elif match.startswith('//'):
                     logger.info(f"প্রোটোকল রিলেটিভ ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
                     return f"https:{match}"
                 # ডোমেন রিলেটিভ সলভার (যেমন: /hls/master.m3u8) - এটি সফল হওয়া মিররের সাথে মার্জ করা হবে
-                elif match.startswith('/') or 'master.m3u8' in match or 'playlist.m3u8' in match:
+                elif match.startswith('/'):
                     base_domain = f"https://{urlparse(m_url_used).netloc}"
-                    if not match.startswith('/'):
-                        match = '/' + match
                     resolved_url = base_domain + match
                     logger.info(f"রিলেটিভ লিঙ্ক মার্জ করে সোর্স পাওয়া গেছে: {resolved_url}")
                     return resolved_url
@@ -318,11 +330,15 @@ def generic_html_scraper(url):
             pass
             
     if html:
-        html = html.replace('\\/', '/')
-        # পেজ সোর্সের ভেতর কোটেড স্ট্রিং থেকে ডাইরেক্ট ভিডিও ফাইলের এক্সটেনশন খুঁজে ম্যাচ করা হচ্ছে
-        matches = re.findall(r'["\']([^"\']+\.(?:mp4|mkv|mov|m3u8)[^\s"\']*)["\']', html)
+        html_cleaned = html_lib.unescape(html)
+        html_cleaned = html_cleaned.replace('\\/', '/')
+        html_cleaned = html_cleaned.replace('\\"', '"').replace("\\'", "'")
+        
+        # কোট-মুক্ত রেগুলার এক্সপ্রেশন সার্চ
+        pattern = r'(?:https?://|//|/)[^\s"\'<>]+?\.(?:mp4|mkv|mov|m3u8)[^\s"\'<>]*'
+        matches = re.findall(pattern, html_cleaned)
+        
         for match in matches:
-            # বিজ্ঞাপন বা থার্ডপার্টি ট্র্যাকার ফিল্টারিং
             if any(x in match.lower() for x in ['google', 'facebook', 'analytics', 'adsystem', 'player.js', 'videojs', 'hls.js']):
                 continue
                 
@@ -352,7 +368,6 @@ def get_smart_link(url):
             return "LULU_FAILED"
             
     # ২. অপরিচিত ফাইল-হোস্টিং সাইট (যেমন: morencius.com) সনাক্তকরণ এবং জেনেরিক স্ক্র্যাপার কল
-    # বড় বড় ওটিটি বা সোশাল সাইট (ইউটিউব, ফেসবুক) হলে জেনেরিক স্ক্র্যাপার চালানো হবে না, কারণ ওগুলোর জন্য yt-dlp ই উপযুক্ত
     is_social_or_ott = any(domain in url.lower() for domain in [
         "youtube.com", "youtu.be", "facebook.com", "instagram.com", "twitter.com", "tiktok.com", "vimeo.com"
     ])
@@ -409,8 +424,8 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.7 - Universal HTML Scraper Upgrade)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে ইউনিভার্সাল এইচটিএমএল সোর্স এক্সট্রাকশন প্রযুক্তি, মিরর রোটেশন (রিলেটিভ মার্জারসহ) এবং দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36)।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.8 - Decoded Stream Upgrade)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে ডিকোডেড ইউনিভার্সাল সোর্স এক্সট্রাকশন প্রযুক্তি, মিরর রোটেশন (রিলেটিভ মার্জারসহ) এবং দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36)।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
@@ -701,7 +716,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.7)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.8)")
     
     await app.start()
     bot_info = await app.get_me()
