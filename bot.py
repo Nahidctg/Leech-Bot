@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.3 - Long Name & Stream Patch) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.4 - Proxy Bypass Upgrade) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -163,7 +163,7 @@ async def progress_bar(current, total, status_text, status_msg, start_time, last
         logger.error(f"UI আপডেট এরর: {e}")
 
 # ==============================================================================
-# --- ৩.১ কাস্টম সোর্স স্ক্র্যাপার ও ক্লাউডফ্লেয়ার বাইপাস মেকানিজম ---
+# --- ৩.১ কাস্টম সোর্স স্ক্র্যাপার ও ৩য় স্তরের প্রক্সি মেকানিজম ---
 # ==============================================================================
 
 def fetch_html_with_curl(url, headers):
@@ -201,18 +201,35 @@ def scrape_luluvid(url):
         }
         
         html = None
-        # মেথড এ: সাধারণ requests মডিউল ট্রাই করা হচ্ছে
+        # মেথড ১: সাধারণ requests মডিউল ট্রাই করা হচ্ছে
         try:
-            response = requests.get(embed_url, headers=headers, timeout=12)
+            response = requests.get(embed_url, headers=headers, timeout=10)
             if response.status_code == 200 and "cloudflare" not in response.text.lower():
                 html = response.text
         except Exception as e:
-            logger.warning(f"সাধারণ HTTP রিকোয়েস্টে ত্রুটি: {e}")
+            logger.warning(f"মেথড ১ (HTTP-Direct) ব্যর্থ: {e}")
             
-        # মেথড বি: সাধারণ রিকোয়েস্ট ব্লক হলে Curl-এর মাধ্যমে ট্রাই করা হচ্ছে
+        # মেথড ২: সাধারণ রিকোয়েস্ট ব্লক হলে Curl-এর মাধ্যমে ট্রাই করা হচ্ছে
         if not html:
-            logger.info("সাধারণ রিকোয়েস্ট ব্লক হয়েছে। সিস্টেম-লেভেল Curl বাইপাস ট্রাই করা হচ্ছে...")
+            logger.info("মেথড ২ (TLS-Curl) বাইপাস ট্রাই করা হচ্ছে...")
             html = fetch_html_with_curl(embed_url, headers)
+            
+        # মেথড ৩: প্রক্সি গেটওয়ে ব্যবহার করে ক্লাউডফ্লেয়ার লক বাইপাস করা হচ্ছে (সার্ভার আইপি ব্লকের সমাধান)
+        if not html or "cloudflare" in html.lower() or "captcha" in html.lower():
+            logger.info("সার্ভার আইপি ব্লকড সনাক্ত হয়েছে। মেথড ৩ (পাবলিক প্রক্সি গেটওয়ে) সক্রিয় করা হচ্ছে...")
+            proxy_urls = [
+                f"https://corsproxy.io/?{embed_url}",
+                f"https://api.codetabs.com/v1/proxy?quest={embed_url}"
+            ]
+            for p_url in proxy_urls:
+                try:
+                    res = requests.get(p_url, headers={'User-Agent': headers['User-Agent']}, timeout=12)
+                    if res.status_code == 200 and "cloudflare" not in res.text.lower():
+                        html = res.text
+                        logger.info("পাবলিক প্রক্সি গেটওয়ে সফলভাবে সোর্স পেজ রিড করেছে!")
+                        break
+                except Exception as pe:
+                    logger.warning(f"প্রক্সি রিকোয়েস্ট ব্যর্থ: {pe}")
             
         if html:
             # JSON Escaped স্ল্যাশ ক্লিন করা (যেমন: https:\/\/ -> https://)
@@ -250,14 +267,9 @@ def get_smart_link(url):
         if scraped_link:
             return scraped_link
         else:
-            # স্ক্র্যাপার ব্যর্থ হলে সরাসরি এমবেড লিঙ্কে রূপান্তর করে পাঠানো হচ্ছে যাতে YT-DLP ট্রাই করতে পারে
-            parsed = urlparse(url)
-            domain = parsed.netloc
-            path = parsed.path.strip('/')
-            if not path.startswith('e/'):
-                embed_url = f"https://{domain}/e/{path}"
-                logger.info(f"স্ক্র্যাপার ব্যর্থ, এমবেড সোর্স ব্যবহার করা হচ্ছে: {embed_url}")
-                return embed_url
+            # যদি সব বাইপাস মেথড ব্যর্থ হয়, তবে বিশেষ ফ্ল্যাগ রিটার্ন করা হবে
+            logger.error("Luluvid এর সব বাইপাস মেথড ব্যর্থ হয়েছে।")
+            return "LULU_FAILED"
 
     headers = get_adaptive_headers(url)
     
@@ -304,8 +316,8 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.3 - Long Name & Stream Patch)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36) এবং শক্তিশালী ক্লাউডফ্লেয়ার বাইপাস মেকানিজম।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.4 - Proxy Bypass Upgrade)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36) এবং শক্তিশালী ৩য় স্তরের প্রক্সি মেকানিজম।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
@@ -328,6 +340,17 @@ async def download_handler(client, message):
     status_msg = await message.reply_text("🔎 লিঙ্ক বিশ্লেষণ ও সেরা ডাউনলোড মেথড খোঁজা হচ্ছে...")
     
     direct_link = await asyncio.to_thread(get_smart_link, url)
+    
+    # Luluvid সম্পূর্ণ ব্লকড হলে ব্যবহারকারীকে স্পষ্ট নোটিফিকেশন পাঠানো হবে
+    if direct_link == "LULU_FAILED":
+        shutil.rmtree(f"downloads/{user_id}_*", ignore_errors=True)
+        await status_msg.edit_text(
+            "❌ **ডাউনলোড ব্যর্থ!**\n\n"
+            "**কারণ:** সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে। Luluvid সাইটটি বর্তমানে আপনার হোস্টিং আইপি এবং আমাদের পাবলিক প্রক্সি গেটওয়েগুলো সাময়িকভাবে ব্লক করে দিয়েছে (Cloudflare Captcha Lock)।\n"
+            "অনুগ্রহ করে অন্য কোনো সাইটের লিঙ্ক ব্যবহার করুন অথবা কিছু সময় পর আবার ট্রাই করুন।"
+        )
+        return
+        
     if not direct_link:
         direct_link = url
         
@@ -340,9 +363,9 @@ async def download_handler(client, message):
     start_time = time.time()
     last_update_time = [0]
 
-    # সিদ্ধান্ত গ্রহণ: HLS (.m3u8) এবং এমবেড প্লেয়ার পেজ সরাসরি স্ট্রিম মেথড বাইপাস করে মেথড-১ (YT-DLP) এ পাঠানো হবে
+    # সিদ্ধান্ত গ্রহণ: HLS (.m3u8) সরাসরি স্ট্রিম মেথড বাইপাস করে মেথড-১ (YT-DLP) এ পাঠানো হবে
     is_direct_file = (any(ext in direct_link.lower() for ext in ['.mkv', '.mp4', '.zip', '.rar', '.mov', '.avi', '.ts']) 
-                      or "workers.dev" in direct_link) and ".m3u8" not in direct_link.lower() and "/e/" not in direct_link.lower()
+                      or "workers.dev" in direct_link) and ".m3u8" not in direct_link.lower()
     
     if not is_direct_file:
         # মেথড ১: YT-DLP ব্যবহার করা হচ্ছে
@@ -357,7 +380,7 @@ async def download_handler(client, message):
                         loop
                     )
 
-            # trim_file_name এবং %(title).80s ব্যবহারের মাধ্যমে Errno 36 (File name too long) স্থায়ী সমাধান করা হয়েছে
+            # trim_file_name এবং %(title).80s ব্যবহারের মাধ্যমে Errno 36 (File name too long) সমাধান করা হয়েছে
             ydl_opts = {
                 'outtmpl': f'{download_dir}/%(title).80s.%(ext)s',
                 'trim_file_name': 80,
@@ -380,12 +403,11 @@ async def download_handler(client, message):
                 return
         except Exception as e:
             logger.error(f"YT-DLP ইঞ্জিন ব্যর্থ হয়েছে: {e}")
-            # .m3u8 বা এমবেড লিঙ্ক হলে পরবর্তী মেথডে ট্রাই করার প্রয়োজন নেই, সরাসরি ব্যর্থতা জানানো হবে
-            if ".m3u8" in direct_link.lower() or "lulucdn" in direct_link.lower() or "/e/" in direct_link.lower():
+            if ".m3u8" in direct_link.lower() or "lulucdn" in direct_link.lower():
                 shutil.rmtree(download_dir, ignore_errors=True)
                 await status_msg.edit_text(
                     f"❌ **ডাউনলোড ব্যর্থ!**\n\n"
-                    f"**কারণ:** সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে বা আইপি ব্লক করা হয়েছে।\n"
+                    f"**কারণ:** সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে বা সিডিএন আইপি ব্লক করা হয়েছে।\n"
                     f"`{str(e)[:150]}`"
                 )
                 return
@@ -556,7 +578,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.3)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.4)")
     
     await app.start()
     bot_info = await app.get_me()
