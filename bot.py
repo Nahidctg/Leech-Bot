@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.0 - AI Adaptive Engine) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.1 - Adaptive Stream Support) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -38,7 +38,7 @@ BOT_TOKEN = "8464633052:AAFQv6OqDkpipNyLxAE5SqgYnH9201mpK6E"
 STRING_SESSION = "" 
 LOG_CHANNEL = -1003999674690 
 
-# সেশন রিভোকড সমস্যা এড়াতে সেশনের নাম পরিবর্তন করে ultimate_bot_instance_v3 করা হয়েছে
+# সেশন রিভোকড সমস্যা এড়াতে সেশনের নাম ultimate_bot_instance_v3 রাখা হয়েছে
 app = Client(
     "ultimate_bot_instance_v3", 
     api_id=API_ID, 
@@ -69,7 +69,7 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPad; CPU OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1"
 ]
 
-def get_adaptive_headers(url):
+def get_adaptive_headers(url, original_url=None):
     """লিঙ্কের ডোমেইন অনুযায়ী স্বয়ংক্রিয় হেডার জেনারেট করে"""
     parsed = urlparse(url)
     domain = parsed.netloc
@@ -81,8 +81,14 @@ def get_adaptive_headers(url):
         'DNT': '1',
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
-        'Referer': f"https://{domain}/"
     }
+    
+    # যদি মূল রিকোয়েস্টের লিঙ্ক থাকে, তবে সেটিকে Referer হিসেবে সেট করা হয়
+    if original_url:
+        headers['Referer'] = original_url
+        headers['Origin'] = f"https://{urlparse(original_url).netloc}"
+    else:
+        headers['Referer'] = f"https://{domain}/"
     
     # বিশেষ কিছু ডোমেইনের জন্য অতিরিক্ত রেফারার এবং অরিজিন সেটআপ
     if "workers.dev" in domain or "mexanig" in domain:
@@ -160,6 +166,42 @@ async def progress_bar(current, total, status_text, status_msg, start_time, last
         logger.error(f"UI আপডেট এরর: {e}")
 
 # ==============================================================================
+# --- ৩.১ কাস্টম সাইট স্ক্র্যাপার (Luluvid / Lulustream) ---
+# ==============================================================================
+
+def scrape_luluvid(url):
+    """Luluvid/Lulustream এবং অনুরূপ সাইট থেকে আসল স্ট্রিম লিঙ্ক স্ক্র্যাপ করে"""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        path = parsed.path.strip('/')
+        
+        # যদি লিঙ্কটি এমবেড ফরম্যাটে না থাকে, তবে রূপান্তর করে নেওয়া হচ্ছে
+        if not path.startswith('e/'):
+            embed_url = f"https://{domain}/e/{path}"
+        else:
+            embed_url = url
+            
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:119.0) Gecko/20100101 Firefox/119.0',
+            'Referer': url,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+        
+        response = requests.get(embed_url, headers=headers, timeout=15)
+        if response.status_code == 200:
+            html = response.text
+            # স্ক্রিপ্ট ফাইল থেকে .m3u8 বা .mp4 সোর্স ফাইল খোঁজার জন্য রেগুলার এক্সপ্রেশন
+            stream_links = re.findall(r'["\'](https?://[^\s"\']+\.(?:m3u8|mp4)[^\s"\']*)["\']', html)
+            if stream_links:
+                resolved_url = stream_links[0]
+                logger.info(f"Luluvid থেকে ডাইরেক্ট সোর্স পাওয়া গেছে: {resolved_url}")
+                return resolved_url
+    except Exception as e:
+        logger.error(f"Luluvid স্ক্র্যাপিং ব্যর্থ হয়েছে: {e}")
+    return None
+
+# ==============================================================================
 # --- ৪. অ্যাডাপ্টিভ লিঙ্ক রেজলভার ENGINE ---
 # ==============================================================================
 
@@ -167,8 +209,14 @@ def get_smart_link(url):
     """ইঞ্জিনটি স্বয়ংক্রিয়ভাবে পরীক্ষা করবে লিঙ্কটি সরাসরি নাকি কোনো স্ক্র্যাপার প্রয়োজন"""
     logger.info(f"অ্যাডাপ্টিভ এনালাইসিস শুরু: {url}")
     
+    # ১. Luluvid/Lulustream ডোমেন চেক এবং কাস্টম স্ক্র্যাপার কল
+    if any(domain in url.lower() for domain in ["luluvid.com", "lulustream.com", "lulushare.com"]):
+        scraped_link = scrape_luluvid(url)
+        if scraped_link:
+            return scraped_link
+
+    # ২. অন্যান্য সাধারণ লিঙ্কের জন্য ডাইরেক্ট লিঙ্ক খোঁজার প্রক্রিয়া
     headers = get_adaptive_headers(url)
-    
     try:
         session = requests.Session()
         session.headers.update(headers)
@@ -215,8 +263,8 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.0 - AI Adaptive Engine)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে স্মার্ট লিঙ্ক ডিটেকশন অ্যালগরিদম। এটি যেকোনো সাধারণ লিঙ্ক, ক্লাউডফ্লেয়ার ওয়ার্কার লিঙ্ক বা স্ট্রিমিং লিঙ্ক স্বয়ংক্রিয়ভাবে প্রসেস করতে সক্ষম।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.1 - Adaptive Stream Engine)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে স্মার্ট লিঙ্ক ডিটেকশন অ্যালগরিদম। এটি যেকোনো সাধারণ লিঙ্ক, ক্লাউডফ্লেয়ার ওয়ার্কার লিঙ্ক বা স্ট্রিমিং লিঙ্ক (যেমন: Lulustream) স্বয়ংক্রিয়ভাবে প্রসেস করতে সক্ষম।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
@@ -244,7 +292,8 @@ async def download_handler(client, message):
     if not direct_link:
         direct_link = url
         
-    headers = get_adaptive_headers(direct_link)
+    # রিকোয়েস্টে সঠিক ট্র্যাকিং বজায় রাখার জন্য original_url পাস করা হয়েছে
+    headers = get_adaptive_headers(direct_link, original_url=url)
     
     download_dir = f"downloads/{user_id}_{int(time.time())}"
     if not os.path.exists(download_dir):
@@ -253,11 +302,12 @@ async def download_handler(client, message):
     start_time = time.time()
     last_update_time = [0]
 
-    # সিদ্ধান্ত গ্রহণ: ডোমেইনের ধরন এবং লিঙ্কের এক্সটেনশন যাচাই করা
-    is_direct_file = any(ext in direct_link.lower() for ext in ['.mkv', '.mp4', '.zip', '.rar', '.mov', '.avi', '.ts']) or "workers.dev" in direct_link
+    # সিদ্ধান্ত গ্রহণ: ডোমেইনের ধরন এবং লিঙ্কের এক্সটেনশন যাচাই করা (HLS .m3u8 স্ট্রিমিং সরাসরি স্ট্রিম মেথডে চলবে না)
+    is_direct_file = (any(ext in direct_link.lower() for ext in ['.mkv', '.mp4', '.zip', '.rar', '.mov', '.avi', '.ts']) 
+                      or "workers.dev" in direct_link) and ".m3u8" not in direct_link.lower()
     
     if not is_direct_file:
-        # মেথড ১: সাধারণ সোশ্যাল বা ওটিটি ভিডিও হলে YT-DLP ব্যবহার করা হবে
+        # মেথড ১: সাধারণ সোশ্যাল, ওটিটি ভিডিও অথবা HLS প্লেলিস্ট হলে YT-DLP ব্যবহার করা হবে
         await status_msg.edit_text("📥 YT-DLP ইঞ্জিন সক্রিয় করা হচ্ছে...")
         try:
             def ydl_progress_hook(d):
@@ -289,7 +339,7 @@ async def download_handler(client, message):
                 await finish_download(user_id, file_path, download_dir, status_msg, message)
                 return
         except Exception as e:
-            logger.error(f"YT-DLP ইঞ্জিন ব্যর্থ হয়েছে: {e}. অল্টারনেটিভ প্রোটোকল ট্রাই করা হচ্ছে...")
+            logger.error(f"YT-DLP ইঞ্জিন ব্যর্থ হয়েছে: {e}. অল্টারনে티브 প্রোটোকল ট্রাই করা হচ্ছে...")
 
     # মেথড ২: ক্লাউডফ্লেয়ার ওয়ার্কার বা ডাইরেক্ট সেশন বাইপাস ইঞ্জিন (HTTP-Stream chunking)
     await status_msg.edit_text("⚙️ প্রক্সি বাইপাস ইঞ্জিন সক্রিয় হচ্ছে (HTTP-Stream)...")
@@ -456,7 +506,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.0)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.1)")
     
     await app.start()
     bot_info = await app.get_me()
