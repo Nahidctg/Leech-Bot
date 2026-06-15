@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.2 - Cloudflare Bypass Upgrade) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.3 - Long Name & Stream Patch) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -124,7 +124,7 @@ def get_duration(file_path):
     return 0
 
 # ==============================================================================
-# --- ৩. ইউনিফাইড প্রপ্রেস বার ---
+# --- ৩. ইউনিফাইড প্রগ্রেস বার ---
 # ==============================================================================
 
 async def progress_bar(current, total, status_text, status_msg, start_time, last_update_time):
@@ -215,6 +215,9 @@ def scrape_luluvid(url):
             html = fetch_html_with_curl(embed_url, headers)
             
         if html:
+            # JSON Escaped স্ল্যাশ ক্লিন করা (যেমন: https:\/\/ -> https://)
+            html = html.replace('\\/', '/')
+            
             # .m3u8 বা .mp4 সোর্স ফাইল খোঁজা হচ্ছে
             stream_links = re.findall(r'["\'](https?://[^\s"\']+\.(?:m3u8|mp4)[^\s"\']*)["\']', html)
             if stream_links:
@@ -246,6 +249,15 @@ def get_smart_link(url):
         scraped_link = scrape_luluvid(url)
         if scraped_link:
             return scraped_link
+        else:
+            # স্ক্র্যাপার ব্যর্থ হলে সরাসরি এমবেড লিঙ্কে রূপান্তর করে পাঠানো হচ্ছে যাতে YT-DLP ট্রাই করতে পারে
+            parsed = urlparse(url)
+            domain = parsed.netloc
+            path = parsed.path.strip('/')
+            if not path.startswith('e/'):
+                embed_url = f"https://{domain}/e/{path}"
+                logger.info(f"স্ক্র্যাপার ব্যর্থ, এমবেড সোর্স ব্যবহার করা হচ্ছে: {embed_url}")
+                return embed_url
 
     headers = get_adaptive_headers(url)
     
@@ -292,8 +304,8 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.2 - Cloudflare Bypass Upgrade)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে স্মার্ট লিঙ্ক ডিটেকশন অ্যালগরিদম এবং কাস্টম ক্লাউডফ্লেয়ার বাইপাস মেকানিজম।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.3 - Long Name & Stream Patch)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36) এবং শক্তিশালী ক্লাউডফ্লেয়ার বাইপাস মেকানিজম।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
@@ -328,9 +340,9 @@ async def download_handler(client, message):
     start_time = time.time()
     last_update_time = [0]
 
-    # সিদ্ধান্ত গ্রহণ: HLS (.m3u8) হলে সরাসরি স্ট্রিম মেথড বাইপাস করে মেথড-১ (YT-DLP) এ পাঠানো হবে
+    # সিদ্ধান্ত গ্রহণ: HLS (.m3u8) এবং এমবেড প্লেয়ার পেজ সরাসরি স্ট্রিম মেথড বাইপাস করে মেথড-১ (YT-DLP) এ পাঠানো হবে
     is_direct_file = (any(ext in direct_link.lower() for ext in ['.mkv', '.mp4', '.zip', '.rar', '.mov', '.avi', '.ts']) 
-                      or "workers.dev" in direct_link) and ".m3u8" not in direct_link.lower()
+                      or "workers.dev" in direct_link) and ".m3u8" not in direct_link.lower() and "/e/" not in direct_link.lower()
     
     if not is_direct_file:
         # মেথড ১: YT-DLP ব্যবহার করা হচ্ছে
@@ -345,8 +357,10 @@ async def download_handler(client, message):
                         loop
                     )
 
+            # trim_file_name এবং %(title).80s ব্যবহারের মাধ্যমে Errno 36 (File name too long) স্থায়ী সমাধান করা হয়েছে
             ydl_opts = {
-                'outtmpl': f'{download_dir}/%(title)s.%(ext)s',
+                'outtmpl': f'{download_dir}/%(title).80s.%(ext)s',
+                'trim_file_name': 80,
                 'progress_hooks': [ydl_progress_hook],
                 'nocheckcertificate': True, 
                 'quiet': True,
@@ -366,12 +380,12 @@ async def download_handler(client, message):
                 return
         except Exception as e:
             logger.error(f"YT-DLP ইঞ্জিন ব্যর্থ হয়েছে: {e}")
-            # .m3u8 লিঙ্ক হলে পরবর্তী মেথডে ট্রাই করার প্রয়োজন নেই, সরাসরি ব্যর্থতা জানানো হবে
-            if ".m3u8" in direct_link.lower() or "lulucdn" in direct_link.lower():
+            # .m3u8 বা এমবেড লিঙ্ক হলে পরবর্তী মেথডে ট্রাই করার প্রয়োজন নেই, সরাসরি ব্যর্থতা জানানো হবে
+            if ".m3u8" in direct_link.lower() or "lulucdn" in direct_link.lower() or "/e/" in direct_link.lower():
                 shutil.rmtree(download_dir, ignore_errors=True)
                 await status_msg.edit_text(
                     f"❌ **ডাউনলোড ব্যর্থ!**\n\n"
-                    f"**কারণ:** সার্ভার সিকিউরিটি লক এড়ানো যায়নি। স্ট্রিম লিঙ্ক পাওয়া গেলেও সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে।\n"
+                    f"**কারণ:** সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে বা আইপি ব্লক করা হয়েছে।\n"
                     f"`{str(e)[:150]}`"
                 )
                 return
@@ -384,6 +398,11 @@ async def download_handler(client, message):
         if not any(filename.lower().endswith(ext) for ext in ['.mp4', '.mkv', '.mov', '.avi', '.zip', '.rar', '.ts']):
             filename += ".mp4"
             
+        # অতিরিক্ত দীর্ঘ নাম এড়াতে ফাইলের নামের দৈর্ঘ্য লিমিট করা হচ্ছে
+        if len(filename) > 80:
+            name, ext = os.path.splitext(filename)
+            filename = name[:70] + ext
+
         file_path = os.path.join(download_dir, filename)
         
         response = requests.get(direct_link, headers=headers, stream=True, timeout=45)
@@ -438,7 +457,7 @@ async def finish_download(user_id, file_path, download_dir, status_msg, message)
     )
 
 # ==============================================================================
-# --- ৭. রিনেম ও থাম্বনেইল হ্যান্ডলার ---
+# --- ७. রিনেম ও থাম্বনেইল হ্যান্ডলার ---
 # ==============================================================================
 
 @app.on_message(filters.private & (filters.text | filters.photo) & ~filters.command(["start"]))
@@ -537,7 +556,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.2)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.3)")
     
     await app.start()
     bot_info = await app.get_me()
