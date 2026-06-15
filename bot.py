@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.8 - Decoded Stream Patch) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.9 - Google Proxy Bypass) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -14,6 +14,7 @@ import requests
 import yt_dlp
 import logging
 import html as html_lib  # HTML Entity Decoding এর জন্য
+import urllib.parse      # ইউআরএল এনকোডিং এর জন্য
 from datetime import datetime
 from urllib.parse import urlparse
 from pyrogram import Client, filters, idle, errors
@@ -164,7 +165,7 @@ async def progress_bar(current, total, status_text, status_msg, start_time, last
         logger.error(f"UI আপডেট এরর: {e}")
 
 # ==============================================================================
-# --- ৩.১ ডাইনামিক মিরর রোটেশন ও প্রক্সি মেকানিজম ---
+# --- ৩.১ ডাইনামিক মিরর রোটেশন ও গুগলের ট্রাস্টেড প্রক্সি গেটওয়ে ---
 # ==============================================================================
 
 def fetch_html_with_curl(url, headers):
@@ -239,7 +240,7 @@ def scrape_luluvid(url):
                     break
                 html = None
                 
-        # 3. প্রক্সি মেথড
+        # 3. সাধারণ প্রক্সি মেথড
         if not html:
             logger.info("সকল মিরর সরাসরি ব্লকড। প্রক্সি গেটওয়ে সক্রিয় করা হচ্ছে...")
             proxy_services = [
@@ -260,6 +261,22 @@ def scrape_luluvid(url):
                         continue
                 if html:
                     break
+                    
+        # 4. গুগল ট্রান্সলেটর গেটওয়ে প্রক্সি মেথড (সম্পূর্ণ আনব্লকড আলটিমেট গেটওয়ে)
+        if not html:
+            logger.info("পাবলিক প্রক্সি ব্যর্থ। মেথড ৪ (গুগল ট্রান্সলেট গেটওয়ে) সক্রিয় করা হচ্ছে...")
+            for m_url in mirrors[:2]:
+                encoded_m_url = urllib.parse.quote(m_url, safe='')
+                gt_url = f"https://translate.googleusercontent.com/translate_c?depth=1&hl=en&prev=search&rurl=translate.google.com&sl=auto&sp=nmt&tl=en&u={encoded_m_url}"
+                try:
+                    res = requests.get(gt_url, headers={'User-Agent': headers['User-Agent']}, timeout=12)
+                    if res.status_code == 200 and "cloudflare" not in res.text.lower():
+                        html = res.text
+                        m_url_used = m_url
+                        logger.info(f"গুগল ট্রান্সলেট গেটওয়ে সফলভাবে মিরর ({urlparse(m_url).netloc}) রিড করেছে!")
+                        break
+                except Exception as gte:
+                    logger.warning(f"গুগল ট্রান্সলেট রিকোয়েস্ট ব্যর্থ: {gte}")
             
         if html and m_url_used:
             # ক. HTML Entity ডিকোডিং (যেমন: &#x2F; -> /)
@@ -283,15 +300,15 @@ def scrape_luluvid(url):
                 if match.startswith('http://') or match.startswith('https://'):
                     logger.info(f"সরাসরি ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
                     return match
-                # প্রোটোকল রিলেটিভ সলভার
+                # প্রোটোকল রিলেティブ সলভার
                 elif match.startswith('//'):
-                    logger.info(f"প্রোটোকল রিলেটিভ ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
+                    logger.info(f"প্রোটোকল রিলেティブ ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
                     return f"https:{match}"
-                # ডোমেন রিলেটিভ সলভার (যেমন: /hls/master.m3u8) - এটি সফল হওয়া মিররের সাথে মার্জ করা হবে
+                # ডোমেন রিলেティブ সলভার (যেমন: /hls/master.m3u8) - এটি সফল হওয়া মিররের সাথে মার্জ করা হবে
                 elif match.startswith('/'):
                     base_domain = f"https://{urlparse(m_url_used).netloc}"
                     resolved_url = base_domain + match
-                    logger.info(f"রিলেটিভ লিঙ্ক মার্জ করে সোর্স পাওয়া গেছে: {resolved_url}")
+                    logger.info(f"রিলেティブ লিঙ্ক মার্জ করে সোর্স পাওয়া গেছে: {resolved_url}")
                     return resolved_url
                 
     except Exception as e:
@@ -328,6 +345,19 @@ def generic_html_scraper(url):
                 html = res.text
         except Exception:
             pass
+            
+    # ৪. গুগল ট্রান্সলেটর গেটওয়ে প্রক্সি মেথড (থার্ডপার্টি সাইটের ক্লাউডফ্লেয়ার বাইপাস)
+    if not html or "cloudflare" in html.lower():
+        logger.info("জেনেরিক পেজ সোর্স সরাসরি ব্লকড। গুগল ট্রান্সলেটর গেটওয়ে সক্রিয় করা হচ্ছে...")
+        encoded_url = urllib.parse.quote(url, safe='')
+        gt_url = f"https://translate.googleusercontent.com/translate_c?depth=1&hl=en&prev=search&rurl=translate.google.com&sl=auto&sp=nmt&tl=en&u={encoded_url}"
+        try:
+            res = requests.get(gt_url, headers={'User-Agent': headers['User-Agent']}, timeout=12)
+            if res.status_code == 200 and "cloudflare" not in res.text.lower():
+                html = res.text
+                logger.info("গুগল ট্রান্সলেট গেটওয়ে সফলভাবে অপরিচিত পেজ সোর্স রিড করেছে!")
+        except Exception as e:
+            logger.warning(f"জেনেরিক গুগল ট্রান্সলেটর গেটওয়ে ব্যর্থ: {e}")
             
     if html:
         html_cleaned = html_lib.unescape(html)
@@ -424,8 +454,8 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.8 - Decoded Stream Upgrade)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে ডিকোডেড ইউনিভার্সাল সোর্স এক্সট্রাকশন প্রযুক্তি, মিরর রোটেশন (রিলেটিভ মার্জারসহ) এবং দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36)।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.9 - Google Proxy Bypass)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে গুগলের অফিশিয়াল ট্রাস্টেড গেটওয়ে বাইপাস প্রযুক্তি, মিরর রোটেশন (রিলেটিভ মার্জারসহ) এবং দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36)।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
@@ -449,7 +479,7 @@ async def download_handler(client, message):
     
     direct_link = await asyncio.to_thread(get_smart_link, url)
     
-    # Luluvid সম্পূর্ণ ব্লকড হলে ব্যবহারকারীকে স্পষ্ট নোটিফিকেশন পাঠানো হবে
+    # Luluvid সম্পূর্ণন রূপ ব্লকড হলে ব্যবহারকারীকে স্পষ্ট নোটিফিকেশন পাঠানো হবে
     if direct_link == "LULU_FAILED":
         shutil.rmtree(f"downloads/{user_id}_*", ignore_errors=True)
         await status_msg.edit_text(
@@ -716,7 +746,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.8)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.9)")
     
     await app.start()
     bot_info = await app.get_me()
