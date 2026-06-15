@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.4 - Proxy Bypass Upgrade) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.5 - Mirror Rotation Upgrade) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -163,13 +163,13 @@ async def progress_bar(current, total, status_text, status_msg, start_time, last
         logger.error(f"UI আপডেট এরর: {e}")
 
 # ==============================================================================
-# --- ৩.১ কাস্টম সোর্স স্ক্র্যাপার ও ৩য় স্তরের প্রক্সি মেকানিজম ---
+# --- ৩.১ ডাইনামিক মিরর রোটেশন ও প্রক্সি মেকানিজম ---
 # ==============================================================================
 
 def fetch_html_with_curl(url, headers):
     """সিস্টেম লেভেলের Curl ব্যবহার করে ক্লাউডফ্লেয়ার ও TLS ব্লক বাইপাস করার চেষ্টা"""
     try:
-        cmd = ["curl", "-s", "-L", "--connect-timeout", "12"]
+        cmd = ["curl", "-s", "-L", "--connect-timeout", "10"]
         for key, val in headers.items():
             cmd.extend(["-H", f"{key}: {val}"])
         cmd.append(url)
@@ -182,54 +182,75 @@ def fetch_html_with_curl(url, headers):
     return None
 
 def scrape_luluvid(url):
-    """Luluvid/Lulustream এবং অনুরূপ সাইট থেকে আসল স্ট্রিম লিঙ্ক স্ক্র্যাপ করে"""
+    """মিরর রোটেশন এবং প্রক্সি ব্যবহার করে সোর্স লিঙ্ক স্ক্র্যাপ করার প্রক্রিয়া"""
     try:
         parsed = urlparse(url)
-        domain = parsed.netloc
         path = parsed.path.strip('/')
         
-        if not path.startswith('e/'):
-            embed_url = f"https://{domain}/e/{path}"
-        else:
-            embed_url = url
-            
+        # ইউনিক ভিডিও কোড আলাদা করা হচ্ছে
+        code = path.replace('e/', '').strip('/')
+        
+        # Luluvid-এর সক্রিয় মিরর ডোমেনসমূহের তালিকা
+        mirrors = [
+            f"https://luluply.com/e/{code}",
+            f"https://lulustream.co/e/{code}",
+            f"https://lulusp.com/e/{code}",
+            f"https://lulushare.com/e/{code}",
+            f"https://lulustream.com/e/{code}",
+            f"https://luluvid.com/e/{code}"
+        ]
+        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': url,
+            'Referer': 'https://google.com/', # জেনেরিক রিফায়ার ব্যবহারের মাধ্যমে ট্র্যাকিং ব্লক এড়ানো
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
         }
         
         html = None
-        # মেথড ১: সাধারণ requests মডিউল ট্রাই করা হচ্ছে
-        try:
-            response = requests.get(embed_url, headers=headers, timeout=10)
-            if response.status_code == 200 and "cloudflare" not in response.text.lower():
-                html = response.text
-        except Exception as e:
-            logger.warning(f"মেথড ১ (HTTP-Direct) ব্যর্থ: {e}")
-            
-        # মেথড ২: সাধারণ রিকোয়েস্ট ব্লক হলে Curl-এর মাধ্যমে ট্রাই করা হচ্ছে
+        
+        # ধাপ ১: মিররগুলোর ওপর সরাসরি সাধারণ HTTP রিকোয়েস্ট (সবচেয়ে দ্রুত মেথড)
+        for m_url in mirrors:
+            logger.info(f"মিরর ট্রাই করা হচ্ছে: {m_url}")
+            try:
+                response = requests.get(m_url, headers=headers, timeout=6)
+                if response.status_code == 200 and "cloudflare" not in response.text.lower():
+                    html = response.text
+                    logger.info(f"মিরর {urlparse(m_url).netloc} থেকে সরাসরি সংযোগ সফল হয়েছে!")
+                    break
+            except Exception:
+                continue
+                
+        # ধাপ ২: সরাসরি মেথড ব্যর্থ হলে, প্রথম ৩টি মিররে সিস্টেম Curl দিয়ে চেষ্টা
         if not html:
-            logger.info("মেথড ২ (TLS-Curl) বাইপাস ট্রাই করা হচ্ছে...")
-            html = fetch_html_with_curl(embed_url, headers)
-            
-        # মেথড ৩: প্রক্সি গেটওয়ে ব্যবহার করে ক্লাউডফ্লেয়ার লক বাইপাস করা হচ্ছে (সার্ভার আইপি ব্লকের সমাধান)
-        if not html or "cloudflare" in html.lower() or "captcha" in html.lower():
-            logger.info("সার্ভার আইপি ব্লকড সনাক্ত হয়েছে। মেথড ৩ (পাবলিক প্রক্সি গেটওয়ে) সক্রিয় করা হচ্ছে...")
-            proxy_urls = [
-                f"https://corsproxy.io/?{embed_url}",
-                f"https://api.codetabs.com/v1/proxy?quest={embed_url}"
+            for m_url in mirrors[:3]:
+                logger.info(f"Curl দিয়ে মিরর ট্রাই করা হচ্ছে: {m_url}")
+                html = fetch_html_with_curl(m_url, headers)
+                if html and "cloudflare" not in html.lower():
+                    logger.info(f"Curl দিয়ে মিরর {urlparse(m_url).netloc} সংযোগ সফল!")
+                    break
+                html = None
+                
+        # ধাপ ৩: যদি সব ব্লক থাকে, তবে প্রথম ২টি মিররের ওপর পাবলিক প্রক্সি গেটওয়ে প্রয়োগ
+        if not html:
+            logger.info("সকল মিরর সরাসরি ব্লকড। প্রক্সি গেটওয়ে সক্রিয় করা হচ্ছে...")
+            proxy_services = [
+                "https://corsproxy.io/?{}",
+                "https://api.codetabs.com/v1/proxy?quest={}"
             ]
-            for p_url in proxy_urls:
-                try:
-                    res = requests.get(p_url, headers={'User-Agent': headers['User-Agent']}, timeout=12)
-                    if res.status_code == 200 and "cloudflare" not in res.text.lower():
-                        html = res.text
-                        logger.info("পাবলিক প্রক্সি গেটওয়ে সফলভাবে সোর্স পেজ রিড করেছে!")
-                        break
-                except Exception as pe:
-                    logger.warning(f"প্রক্সি রিকোয়েস্ট ব্যর্থ: {pe}")
+            for m_url in mirrors[:2]:
+                for p_service in proxy_services:
+                    p_url = p_service.format(m_url)
+                    try:
+                        res = requests.get(p_url, headers={'User-Agent': headers['User-Agent']}, timeout=10)
+                        if res.status_code == 200 and "cloudflare" not in res.text.lower():
+                            html = res.text
+                            logger.info(f"প্রক্সি ও মিরর ({urlparse(m_url).netloc}) সমন্বয়ে সোর্স উদ্ধার সফল!")
+                            break
+                    except Exception:
+                        continue
+                if html:
+                    break
             
         if html:
             # JSON Escaped স্ল্যাশ ক্লিন করা (যেমন: https:\/\/ -> https://)
@@ -239,22 +260,22 @@ def scrape_luluvid(url):
             stream_links = re.findall(r'["\'](https?://[^\s"\']+\.(?:m3u8|mp4)[^\s"\']*)["\']', html)
             if stream_links:
                 resolved_url = stream_links[0]
-                logger.info(f"Luluvid সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
+                logger.info(f"সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
                 return resolved_url
                 
-            # বিকল্প রেগুলার এক্সপ্রেশন (যেমন: file: "...")
+            # বিকল্প রেগুলার এক্সপ্রেশন
             file_match = re.search(r'file\s*:\s*["\'](https?://[^"\']+)["\']', html)
             if file_match:
                 resolved_url = file_match.group(1)
-                logger.info(f"Luluvid অল্টারনেটিভ সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
+                logger.info(f"বিকল্প সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
                 return resolved_url
                 
     except Exception as e:
-        logger.error(f"Luluvid স্ক্র্যাপিং সম্পূর্ণ ব্যর্থ: {e}")
+        logger.error(f"Luluvid মিরর রোটেশন স্ক্র্যাপিংয়ে ত্রুটি: {e}")
     return None
 
 # ==============================================================================
-# --- ৪. অ্যাডাপ্টিভ লিঙ্ক রেজলভার ENGINE ---
+# --- ৪. লিঙ্ক রেজলভার ENGINE ---
 # ==============================================================================
 
 def get_smart_link(url):
@@ -262,13 +283,13 @@ def get_smart_link(url):
     logger.info(f"অ্যাডাপ্টিভ এনালাইসিস শুরু: {url}")
     
     # ১. Luluvid/Lulustream ডোমেন সনাক্তকরণ
-    if any(domain in url.lower() for domain in ["luluvid.com", "lulustream.com", "lulushare.com"]):
+    if any(domain in url.lower() for domain in ["luluvid.com", "lulustream.com", "lulushare.com", "luluply.com", "lulustream.co"]):
         scraped_link = scrape_luluvid(url)
         if scraped_link:
             return scraped_link
         else:
             # যদি সব বাইপাস মেথড ব্যর্থ হয়, তবে বিশেষ ফ্ল্যাগ রিটার্ন করা হবে
-            logger.error("Luluvid এর সব বাইপাস মেথড ব্যর্থ হয়েছে।")
+            logger.error("Luluvid এর সব বাইপাস মিরর মেথড ব্যর্থ হয়েছে।")
             return "LULU_FAILED"
 
     headers = get_adaptive_headers(url)
@@ -316,15 +337,15 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.4 - Proxy Bypass Upgrade)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36) এবং শক্তিশালী ৩য় স্তরের প্রক্সি মেকানিজম।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.5 - Mirror Rotation Upgrade)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে মিরর ডোমেইন রোটেশন প্রযুক্তি, দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36) এবং শক্তিশালী ৩য় স্তরের প্রক্সি মেকানিজম।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
     await message.reply_text(welcome_text)
 
 # ==============================================================================
-# --- ৬. অ্যাডাপ্টিভ ডাউনলোড সেকশন (Decision Maker) ---
+# --- ৬. ডাউনলোড সেকশন (Decision Maker) ---
 # ==============================================================================
 
 @app.on_message(filters.regex(r'https?://[^\s]+') & filters.private)
@@ -346,7 +367,7 @@ async def download_handler(client, message):
         shutil.rmtree(f"downloads/{user_id}_*", ignore_errors=True)
         await status_msg.edit_text(
             "❌ **ডাউনলোড ব্যর্থ!**\n\n"
-            "**কারণ:** সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে। Luluvid সাইটটি বর্তমানে আপনার হোস্টিং আইপি এবং আমাদের পাবলিক প্রক্সি গেটওয়েগুলো সাময়িকভাবে ব্লক করে দিয়েছে (Cloudflare Captcha Lock)।\n"
+            "**কারণ:** সোর্স সার্ভার সংযোগ প্রত্যাখ্যান করেছে। Luluvid সাইটটি বর্তমানে তাদের সব মিরর ডোমেইনসহ আপনার হোস্টিং আইপি এবং আমাদের প্রক্সি গেটওয়েগুলো সাময়িকভাবে ব্লক করে দিয়েছে (Cloudflare Captcha Lock)।\n"
             "অনুগ্রহ করে অন্য কোনো সাইটের লিঙ্ক ব্যবহার করুন অথবা কিছু সময় পর আবার ট্রাই করুন।"
         )
         return
@@ -578,7 +599,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.4)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.5)")
     
     await app.start()
     bot_info = await app.get_me()
