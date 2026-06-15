@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.6 - Hybrid Gateway Upgrade) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.7 - Universal HTML Scraper) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -202,36 +202,39 @@ def scrape_luluvid(url):
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://google.com/', # জেনেরিক রিফায়ার ব্যবহারের মাধ্যমে ট্র্যাকিং ব্লক এড়ানো
+            'Referer': 'https://google.com/', 
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
         }
         
         html = None
+        m_url_used = None
         
-        # ধাপ ১: মিররগুলোর ওপর সরাসরি সাধারণ HTTP রিকোয়েস্ট (সবচেয়ে দ্রুত মেথড)
+        # 1. সরাসরি মিররগুলোর ওপর HTTP রিকোয়েস্ট
         for m_url in mirrors:
             logger.info(f"মিরর ট্রাই করা হচ্ছে: {m_url}")
             try:
                 response = requests.get(m_url, headers=headers, timeout=6)
                 if response.status_code == 200 and "cloudflare" not in response.text.lower():
                     html = response.text
+                    m_url_used = m_url
                     logger.info(f"মিরর {urlparse(m_url).netloc} থেকে সরাসরি সংযোগ সফল হয়েছে!")
                     break
             except Exception:
                 continue
                 
-        # ধাপ ২: সরাসরি মেথড ব্যর্থ হলে, প্রথম ৩টি মিররে সিস্টেম Curl দিয়ে চেষ্টা
+        # 2. Curl মেথড
         if not html:
             for m_url in mirrors[:3]:
                 logger.info(f"Curl দিয়ে মিরর ট্রাই করা হচ্ছে: {m_url}")
                 html = fetch_html_with_curl(m_url, headers)
                 if html and "cloudflare" not in html.lower():
+                    m_url_used = m_url
                     logger.info(f"Curl দিয়ে মিরর {urlparse(m_url).netloc} সংযোগ সফল!")
                     break
                 html = None
                 
-        # ধাপ ৩: যদি সব ব্লক থাকে, তবে প্রথম ২টি মিররের ওপর পাবলিক প্রক্সি গেটওয়ে প্রয়োগ
+        # 3. প্রক্সি মেথড
         if not html:
             logger.info("সকল মিরর সরাসরি ব্লকড। প্রক্সি গেটওয়ে সক্রিয় করা হচ্ছে...")
             proxy_services = [
@@ -245,6 +248,7 @@ def scrape_luluvid(url):
                         res = requests.get(p_url, headers={'User-Agent': headers['User-Agent']}, timeout=10)
                         if res.status_code == 200 and "cloudflare" not in res.text.lower():
                             html = res.text
+                            m_url_used = m_url
                             logger.info(f"প্রক্সি ও মিরর ({urlparse(m_url).netloc}) সমন্বয়ে সোর্স উদ্ধার সফল!")
                             break
                     except Exception:
@@ -252,26 +256,82 @@ def scrape_luluvid(url):
                 if html:
                     break
             
-        if html:
-            # JSON Escaped স্ল্যাশ ক্লিন করা (যেমন: https:\/\/ -> https://)
+        if html and m_url_used:
             html = html.replace('\\/', '/')
             
-            # .m3u8 বা .mp4 সোর্স ফাইল খোঁজা হচ্ছে
-            stream_links = re.findall(r'["\'](https?://[^\s"\']+\.(?:m3u8|mp4)[^\s"\']*)["\']', html)
-            if stream_links:
-                resolved_url = stream_links[0]
-                logger.info(f"সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
-                return resolved_url
+            # নতুন ইউনিভার্সাল স্ক্র্যাপিং লজিক: এটি কোটেড স্ট্রিং থেকে ডাইরেক্ট ও রিলেটিভ লিঙ্ক আলাদা করবে
+            matches = re.findall(r'["\']([^"\']+\.(?:m3u8|mp4)[^\s"\']*)["\']', html)
+            for match in matches:
+                if any(x in match.lower() for x in ['player.js', 'videojs', 'hls.js', 'clappr', 'analytics']):
+                    continue
                 
-            # বিকল্প রেগুলার এক্সপ্রেশন
-            file_match = re.search(r'file\s*:\s*["\'](https?://[^"\']+)["\']', html)
-            if file_match:
-                resolved_url = file_match.group(1)
-                logger.info(f"বিকল্প সোর্স লিঙ্ক পাওয়া গেছে: {resolved_url}")
-                return resolved_url
+                # ডাইরেক্ট লিঙ্ক সলভার
+                if match.startswith('http://') or match.startswith('https://'):
+                    logger.info(f"ডাইরেক্ট ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
+                    return match
+                # প্রোটোকল রিলেটিভ সলভার
+                elif match.startswith('//'):
+                    logger.info(f"প্রোটোকল রিলেটিভ ভিডিও সোর্স লিঙ্ক পাওয়া গেছে: {match}")
+                    return f"https:{match}"
+                # ডোমেন রিলেটিভ সলভার (যেমন: /hls/master.m3u8) - এটি সফল হওয়া মিররের সাথে মার্জ করা হবে
+                elif match.startswith('/') or 'master.m3u8' in match or 'playlist.m3u8' in match:
+                    base_domain = f"https://{urlparse(m_url_used).netloc}"
+                    if not match.startswith('/'):
+                        match = '/' + match
+                    resolved_url = base_domain + match
+                    logger.info(f"রিলেটিভ লিঙ্ক মার্জ করে সোর্স পাওয়া গেছে: {resolved_url}")
+                    return resolved_url
                 
     except Exception as e:
         logger.error(f"Luluvid মিরর রোটেশন স্ক্র্যাপিংয়ে ত্রুটি: {e}")
+    return None
+
+# ==============================================================================
+# --- ৩.২ জেনেরিক ইউনিভার্সাল এইচটিএমএল স্ক্র্যাপার (Morencius.com ইত্যাদির জন্য) ---
+# ==============================================================================
+
+def generic_html_scraper(url):
+    """অপরিচিত বা থার্ড-পার্টি ফাইল শেয়ারিং সাইটের ভেতর থেকে সরাসরি সোর্স লিঙ্ক টেনে বের করার গেটওয়ে"""
+    headers = get_adaptive_headers(url)
+    html = None
+    
+    # ১. সরাসরি HTTP রিকোয়েস্ট ট্রাই
+    try:
+        res = requests.get(url, headers=headers, timeout=8)
+        if res.status_code == 200 and "cloudflare" not in res.text.lower():
+            html = res.text
+    except Exception:
+        pass
+        
+    # ২. Curl মেথড ট্রাই
+    if not html:
+        html = fetch_html_with_curl(url, headers)
+        
+    # ৩. প্রক্সি গেটওয়ে মেথড ট্রাই
+    if not html or "cloudflare" in html.lower():
+        proxy_url = f"https://corsproxy.io/?{url}"
+        try:
+            res = requests.get(proxy_url, headers={'User-Agent': headers['User-Agent']}, timeout=10)
+            if res.status_code == 200:
+                html = res.text
+        except Exception:
+            pass
+            
+    if html:
+        html = html.replace('\\/', '/')
+        # পেজ সোর্সের ভেতর কোটেড স্ট্রিং থেকে ডাইরেক্ট ভিডিও ফাইলের এক্সটেনশন খুঁজে ম্যাচ করা হচ্ছে
+        matches = re.findall(r'["\']([^"\']+\.(?:mp4|mkv|mov|m3u8)[^\s"\']*)["\']', html)
+        for match in matches:
+            # বিজ্ঞাপন বা থার্ডপার্টি ট্র্যাকার ফিল্টারিং
+            if any(x in match.lower() for x in ['google', 'facebook', 'analytics', 'adsystem', 'player.js', 'videojs', 'hls.js']):
+                continue
+                
+            if match.startswith('http://') or match.startswith('https://'):
+                logger.info(f"জেনেরিক পেজ থেকে ভিডিও সোর্স লিঙ্ক উদ্ধার হয়েছে: {match}")
+                return match
+            elif match.startswith('//'):
+                return f"https:{match}"
+                
     return None
 
 # ==============================================================================
@@ -283,15 +343,27 @@ def get_smart_link(url):
     logger.info(f"অ্যাডাপ্টিভ এনালাইসিস শুরু: {url}")
     
     # ১. Luluvid/Lulustream ডোমেন সনাক্তকরণ
-    if any(domain in url.lower() for domain in ["luluvid.com", "lulustream.com", "lulushare.com", "luluply.com", "lulustream.co"]):
+    if any(domain in url.lower() for domain in ["luluvid.com", "lulustream.com", "lulushare.com", "luluply.com", "lulustream.co", "lulusp.com"]):
         scraped_link = scrape_luluvid(url)
         if scraped_link:
             return scraped_link
         else:
-            # যদি সব বাইপাস মেথড ব্যর্থ হয়, তবে বিশেষ ফ্ল্যাগ রিটার্ন করা হবে
             logger.error("Luluvid এর সব বাইপাস মিরর মেথড ব্যর্থ হয়েছে।")
             return "LULU_FAILED"
+            
+    # ২. অপরিচিত ফাইল-হোস্টিং সাইট (যেমন: morencius.com) সনাক্তকরণ এবং জেনেরিক স্ক্র্যাপার কল
+    # বড় বড় ওটিটি বা সোশাল সাইট (ইউটিউব, ফেসবুক) হলে জেনেরিক স্ক্র্যাপার চালানো হবে না, কারণ ওগুলোর জন্য yt-dlp ই উপযুক্ত
+    is_social_or_ott = any(domain in url.lower() for domain in [
+        "youtube.com", "youtu.be", "facebook.com", "instagram.com", "twitter.com", "tiktok.com", "vimeo.com"
+    ])
+    
+    if not is_social_or_ott:
+        logger.info("অপরিচিত থার্ড-পার্টি হোস্টিং সাইট সনাক্ত হয়েছে। জেনেরিক স্ক্র্যাপার সক্রিয় করা হচ্ছে...")
+        scraped_link = generic_html_scraper(url)
+        if scraped_link:
+            return scraped_link
 
+    # ৩. স্ট্যান্ডার্ড লিঙ্ক রেজলভার (ইউটিউব/ফেসবুক ইত্যাদির জন্য)
     headers = get_adaptive_headers(url)
     
     try:
@@ -337,8 +409,8 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.6 - Hybrid Gateway Upgrade)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে হাইব্রিড ফাস্ট-আপলোড গেটওয়ে, মিরর ডোমেইন রোটেশন প্রযুক্তি এবং দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36)।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.7 - Universal HTML Scraper Upgrade)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে ইউনিভার্সাল এইচটিএমএল সোর্স এক্সট্রাকশন প্রযুক্তি, মিরর রোটেশন (রিলেটিভ মার্জারসহ) এবং দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36)।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
@@ -629,7 +701,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.6)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.7)")
     
     await app.start()
     bot_info = await app.get_me()
