@@ -1,5 +1,5 @@
 # ==============================================================================
-# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.5 - Mirror Rotation Upgrade) ---
+# --- আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন (Version 19.6 - Hybrid Gateway Upgrade) ---
 # --- ফিচার: স্মার্ট ডিকোড, ৪জিবি সাপোর্ট, অ্যাডাপ্টিভ ডিসিশন মেকার, অটো-হেডার রোটেশন ---
 # ==============================================================================
 
@@ -209,7 +209,7 @@ def scrape_luluvid(url):
         
         html = None
         
-        # ধাপ ১: মিররগুলোর ওপর সরাসরি সাধারণ HTTP রিকোয়েস্ট (সবচেয়ে দ্রুত মেথড)
+        # ধাপ ১: মিররগুলোর ওপর সরাসরি সাধারণ HTTP রিকোয়েস্ট (সবচেয়ে দ্রুত মেথড)
         for m_url in mirrors:
             logger.info(f"মিরর ট্রাই করা হচ্ছে: {m_url}")
             try:
@@ -337,15 +337,15 @@ async def start_handler(client, message):
     mode = "Premium (4GB Support) ✅" if user_app else "Normal (2GB Limited) ⚠️"
     
     welcome_text = (
-        f"**বট অনলাইন! 🚀 (Version 19.5 - Mirror Rotation Upgrade)**\n\n"
-        f"এই সংস্করণে যুক্ত করা হয়েছে মিরর ডোমেইন রোটেশন প্রযুক্তি, দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36) এবং শক্তিশালী ৩য় স্তরের প্রক্সি মেকানিজম।\n\n"
+        f"**বট অনলাইন! 🚀 (Version 19.6 - Hybrid Gateway Upgrade)**\n\n"
+        f"এই সংস্করণে যুক্ত করা হয়েছে হাইব্রিড ফাস্ট-আপলোড গেটওয়ে, মিরর ডোমেইন রোটেশন প্রযুক্তি এবং দীর্ঘ ফাইলের নামজনিত ক্র্যাশ সমাধান (Errno 36)।\n\n"
         f"**বর্তমান মোড:** `{mode}`\n"
         f"যেকোনো ভিডিও লিঙ্ক পাঠান।"
     )
     await message.reply_text(welcome_text)
 
 # ==============================================================================
-# --- ৬. ডাউনলোড সেকশন (Decision Maker) ---
+# --- ৬. ডাউনলোড সেকশন (Decision Maker with Hybrid Fast-Path) ---
 # ==============================================================================
 
 @app.on_message(filters.regex(r'https?://[^\s]+') & filters.private)
@@ -375,6 +375,36 @@ async def download_handler(client, message):
     if not direct_link:
         direct_link = url
         
+    parsed_link = urlparse(direct_link)
+    
+    # ----------------------------------------------------------------------------------
+    # ⚡ নতুন ফিচার: ছোট ও সরাসরি লিঙ্কের জন্য হাইব্রিড ফাস্ট-আপলোড গেটওয়ে শর্টকাট
+    # ----------------------------------------------------------------------------------
+    is_fast_eligible = any(parsed_link.path.lower().endswith(ext) for ext in ['.mp4', '.mkv', '.mov'])
+    
+    if is_fast_eligible:
+        try:
+            headers = get_adaptive_headers(direct_link, original_url=url)
+            # HEAD রিকোয়েস্ট পাঠিয়ে ফাইল সাইজ জেনে নেওয়া হচ্ছে
+            head_res = requests.head(direct_link, headers=headers, allow_redirects=True, timeout=5)
+            file_size = int(head_res.headers.get('content-length', 0))
+            
+            # যদি সরাসরি ভিডিও ফাইলটি ২০ মেগাবাইটের কম হয়, তবে ফাস্ট-গেটওয়ে দিয়ে সরাসরি আপলোড দেওয়া হবে
+            if 0 < file_size <= 20 * 1024 * 1024:
+                await status_msg.edit_text("⚡ ফাস্ট-আপলোড গেটওয়ে সক্রিয় করা হচ্ছে...")
+                filename = os.path.basename(parsed_link.path) or "video.mp4"
+                
+                await client.send_video(
+                    chat_id=user_id, 
+                    video=direct_link, 
+                    caption=f"✅ **ফাস্ট আপলোড সম্পন্ন!**\n\n📄 **ফাইল:** `{filename}`\n💰 **সাইজ:** `{human_size(file_size)}`"
+                )
+                await status_msg.delete()
+                return # সফল হলে এখানেই প্রসেস শেষ, লোকাল ডাউনলোডের প্রসেসিং বাইপাস করা হলো।
+        except Exception as fast_err:
+            logger.warning(f"ফাস্ট-আপলোড গেটওয়ে ব্যর্থ হয়েছে: {fast_err}। সাধারণ ডাউনলোড লাইনে রি-ডাইরেক্ট করা হচ্ছে...")
+    # ----------------------------------------------------------------------------------
+    
     headers = get_adaptive_headers(direct_link, original_url=url)
     
     download_dir = f"downloads/{user_id}_{int(time.time())}"
@@ -599,7 +629,7 @@ async def upload_callback_handler(client, callback_query):
 
 async def start_all_services():
     print("-" * 50)
-    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.5)")
+    print("আলটিমেট টেলিগ্রাম ভিডিও প্রসেসিং ইঞ্জিন স্টার্ট হচ্ছে... (Version 19.6)")
     
     await app.start()
     bot_info = await app.get_me()
